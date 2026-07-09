@@ -28,7 +28,6 @@ function revalidateTradePaths(id?: string) {
   revalidatePath("/");
   revalidatePath("/trades");
   revalidatePath("/calendar");
-  revalidatePath("/log");
   if (id) {
     revalidatePath(`/trades/${id}`);
   }

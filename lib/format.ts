@@ -43,6 +43,39 @@ export function anxietyLabel(level: number): string {
   return "Panic";
 }
 
+/** Text color class for P&L values (avoids nested ternaries in UI). */
+export function pnlTextClass(pnl: number, destructiveLoss = false): string {
+  if (pnl > 0) {
+    return "text-emerald-400";
+  }
+  if (pnl < 0) {
+    return destructiveLoss ? "text-destructive" : "text-red-400";
+  }
+  return "text-muted-foreground";
+}
+
+export function pnlBadgeVariant(
+  pnl: number
+): "default" | "destructive" | "secondary" {
+  if (pnl > 0) {
+    return "default";
+  }
+  if (pnl < 0) {
+    return "destructive";
+  }
+  return "secondary";
+}
+
+export function anxietyTone(level: number): "ok" | "warn" | "danger" {
+  if (level >= 7) {
+    return "danger";
+  }
+  if (level >= 4) {
+    return "warn";
+  }
+  return "ok";
+}
+
 /** Local calendar day key YYYY-MM-DD */
 export function toDayKey(iso: string): string {
   const d = new Date(iso);

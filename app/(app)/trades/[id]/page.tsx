@@ -20,10 +20,7 @@ export default async function TradeDetailPage({
 
   return (
     <>
-      <SiteHeader
-        description="Full journal entry"
-        title={`${trade.ticker} trade`}
-      />
+      <SiteHeader title={`${trade.ticker} trade`} />
       <TradeDetail trade={trade} />
     </>
   );

@@ -1,24 +1,28 @@
 import type { Metadata } from "next";
-import { Geist_Mono, Space_Grotesk } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-const spaceGrotesk = Space_Grotesk({
+const geistSans = Geist({
   subsets: ["latin"],
-  variable: "--font-sans",
+  variable: "--font-geist-sans",
 });
 
-const fontMono = Geist_Mono({
+const geistMono = Geist_Mono({
   subsets: ["latin"],
-  variable: "--font-mono",
+  variable: "--font-geist-mono",
 });
 
 export const metadata: Metadata = {
   description:
     "Futures prop firm trade journal for MNQ/MES with Heart Rate Index metrics.",
+  icons: {
+    apple: "/logo.svg",
+    icon: "/logo.svg",
+  },
   title: "Trade Logger",
 };
 
@@ -30,15 +34,14 @@ export default function RootLayout({
   return (
     <html
       className={cn(
-        "dark antialiased",
-        fontMono.variable,
-        "font-sans",
-        spaceGrotesk.variable
+        "dark font-sans antialiased",
+        geistSans.variable,
+        geistMono.variable
       )}
       lang="en"
       style={{ colorScheme: "dark" }}
     >
-      <body>
+      <body className="h-svh overflow-hidden font-sans">
         <TooltipProvider>
           {children}
           <Toaster />

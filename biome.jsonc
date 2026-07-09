@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "extends": [
+    "ultracite/biome/core",
+    "ultracite/biome/react",
+    "ultracite/biome/next"
+  ],
+  "linter": {
+    "rules": {
+      // Form-heavy React UI: stable refs for every handler is noise here.
+      "performance": {
+        "noJsxPropsBind": "off"
+      },
+      // Fire-and-forget async in event handlers (onClick={() => void fn()}).
+      "complexity": {
+        "noVoid": "off"
+      },
+      // User-recorded voice notes have no caption track.
+      "a11y": {
+        "useMediaCaption": "off"
+      }
+    }
+  },
+  "overrides": [
+    {
+      // shadcn/ui primitives — vendor-style generated components.
+      "includes": ["components/ui/**"],
+      "linter": {
+        "enabled": false
+      }
+    },
+    {
+      // Chart screenshots are stored as data:image/png URLs; next/image is a poor fit.
+      "includes": [
+        "components/trade-form.tsx",
+        "components/trade-detail.tsx",
+        "components/trades-table.tsx"
+      ],
+      "linter": {
+        "rules": {
+          "performance": {
+            "noImgElement": "off"
+          },
+          "correctness": {
+            "useImageSize": "off"
+          }
+        }
+      }
+    }
+  ]
+}

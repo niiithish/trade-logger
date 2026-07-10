@@ -45,6 +45,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { beginDeleteTrade } from "@/lib/confirm-flow";
+import { formatConfluenceScore } from "@/lib/confluence";
 import {
   anxietyLabel,
   formatDate,
@@ -186,7 +187,10 @@ function TradeRow({ trade }: { trade: Trade }) {
           {trade.positionSize}
         </TableCell>
         <TableCell className="hidden tabular-nums md:table-cell">
-          {trade.confluenceScore}/5
+          {formatConfluenceScore(
+            trade.confluenceScore,
+            trade.confluenceChecklist
+          )}
         </TableCell>
         <TableCell className="hidden lg:table-cell">
           <Badge

@@ -1,5 +1,9 @@
 import { avg, count, desc, eq, sql, sum } from "drizzle-orm";
 
+import {
+  parseConfluenceChecklist,
+  serializeConfluenceChecklist,
+} from "@/lib/confluence";
 import { db } from "@/lib/db";
 import { trades } from "@/lib/db/schema";
 import { toDayKey } from "@/lib/format";
@@ -15,8 +19,10 @@ function mapTrade(row: typeof trades.$inferSelect): Trade {
   return {
     anxietyLevel: row.anxietyLevel,
     chartImage: row.chartImage,
+    confluenceChecklist: parseConfluenceChecklist(row.confluenceChecklist),
     confluenceScore: row.confluenceScore,
     createdAt: row.createdAt,
+    exitImage: row.exitImage ?? null,
     id: row.id,
     notesText: row.notesText,
     pnl: row.pnl,
@@ -51,8 +57,12 @@ export async function createTrade(input: TradeInput): Promise<Trade> {
     .values({
       anxietyLevel: input.anxietyLevel,
       chartImage: input.chartImage,
+      confluenceChecklist: serializeConfluenceChecklist(
+        input.confluenceChecklist
+      ),
       confluenceScore: input.confluenceScore,
       createdAt,
+      exitImage: input.exitImage ?? null,
       id,
       notesText: input.notesText ?? null,
       pnl: input.pnl,

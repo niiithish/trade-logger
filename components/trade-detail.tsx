@@ -26,6 +26,10 @@ import {
 } from "@/components/ui/card";
 import { beginDeleteTrade } from "@/lib/confirm-flow";
 import {
+  formatConfluenceScore,
+  listCheckedConfluenceItems,
+} from "@/lib/confluence";
+import {
   anxietyLabel,
   anxietyTone,
   formatDate,
@@ -40,6 +44,9 @@ export function TradeDetail({ trade }: { trade: Trade }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const hasNotes = Boolean(trade.notesText || trade.voiceNote);
+  const confluenceItems = trade.confluenceChecklist
+    ? listCheckedConfluenceItems(trade.confluenceChecklist, trade.ticker)
+    : [];
 
   async function onConfirmDelete() {
     setDeleting(true);
@@ -99,14 +106,22 @@ export function TradeDetail({ trade }: { trade: Trade }) {
           </div>
         </CardHeader>
         <CardContent className="space-y-6 pt-6">
-          <div className="overflow-hidden rounded-xl bg-muted/20 ring-1 ring-border">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              alt={`${trade.ticker} chart`}
-              className="max-h-[28rem] w-full object-contain"
-              src={trade.chartImage}
-            />
-          </div>
+          {trade.exitImage ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <ChartPanel
+                alt={`${trade.ticker} entry chart`}
+                label="Entry"
+                src={trade.chartImage}
+              />
+              <ChartPanel
+                alt={`${trade.ticker} exit chart`}
+                label="Exit"
+                src={trade.exitImage}
+              />
+            </div>
+          ) : (
+            <ChartPanel alt={`${trade.ticker} chart`} src={trade.chartImage} />
+          )}
 
           <div className="grid gap-3 sm:grid-cols-3">
             <MetricTile
@@ -115,9 +130,16 @@ export function TradeDetail({ trade }: { trade: Trade }) {
               value={String(trade.positionSize)}
             />
             <MetricTile
-              hint="Setup quality"
+              hint={
+                trade.confluenceChecklist
+                  ? "Checklist points"
+                  : "Legacy slider score"
+              }
               label="Confluence"
-              value={`${trade.confluenceScore}/5`}
+              value={formatConfluenceScore(
+                trade.confluenceScore,
+                trade.confluenceChecklist
+              )}
             />
             <MetricTile
               hint={anxietyLabel(trade.anxietyLevel)}
@@ -127,6 +149,37 @@ export function TradeDetail({ trade }: { trade: Trade }) {
               value={`${trade.anxietyLevel}/10`}
             />
           </div>
+
+          {confluenceItems.length > 0 ? (
+            <section className="space-y-2 rounded-xl border border-border/60 bg-card/40 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-medium text-sm">Confluence hits</p>
+                <Badge variant="secondary">
+                  {formatConfluenceScore(
+                    trade.confluenceScore,
+                    trade.confluenceChecklist
+                  )}
+                </Badge>
+              </div>
+              <ul className="space-y-2">
+                {confluenceItems.map((item) => (
+                  <li
+                    className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2"
+                    key={item.label}
+                  >
+                    <p className="font-medium text-sm text-strong">
+                      {item.label}
+                    </p>
+                    {item.detail ? (
+                      <p className="mt-0.5 text-muted-foreground text-xs">
+                        {item.detail}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
 
           {hasNotes ? (
             <div className="grid gap-4">
@@ -164,13 +217,41 @@ export function TradeDetail({ trade }: { trade: Trade }) {
       <ConfirmDialog
         cancelLabel="Cancel"
         confirmLabel="Delete trade"
-        description={`This permanently removes the ${trade.ticker} trade (${formatPnl(trade.pnl)}) and its chart from your journal. This cannot be undone.`}
+        description={`This permanently removes the ${trade.ticker} trade (${formatPnl(trade.pnl)}) and its chart${trade.exitImage ? "s" : ""} from your journal. This cannot be undone.`}
         loading={deleting}
         onConfirm={onConfirmDelete}
         onOpenChange={setConfirmOpen}
         open={confirmOpen}
         title="Delete this trade?"
         variant="destructive"
+      />
+    </div>
+  );
+}
+
+function ChartPanel({
+  alt,
+  label,
+  src,
+}: {
+  alt: string;
+  label?: string;
+  src: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl bg-muted/20 ring-1 ring-border">
+      {label ? (
+        <div className="border-border/60 border-b px-3 py-2">
+          <p className="font-medium text-muted-foreground text-xs tracking-wide">
+            {label}
+          </p>
+        </div>
+      ) : null}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        alt={alt}
+        className="max-h-[28rem] w-full object-contain"
+        src={src}
       />
     </div>
   );

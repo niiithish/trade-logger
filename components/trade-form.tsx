@@ -24,6 +24,7 @@ import { toast } from "sonner";
 
 import { createTradeAction } from "@/app/actions/trades";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ConfluenceChecklistFields } from "@/components/confluence-checklist";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,37 +41,21 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { fileToChartDataUrl } from "@/lib/chart-image";
 import { beginFormReset } from "@/lib/confirm-flow";
 import {
+  type ConfluenceChecklist,
+  serializeConfluenceChecklist,
+  validateConfluenceChecklist,
+} from "@/lib/confluence";
+import {
   DEFAULT_TRADE_FORM,
+  isChartStepComplete,
   isTradeFormDirty,
   type TradeFormSnapshot,
 } from "@/lib/trade-form-state";
-import type { Ticker } from "@/lib/types";
+import type { ChartImageMode, Ticker } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-function fileToPngDataUrl(file: File): Promise<string> {
-  if (file.type !== "image/png") {
-    return Promise.reject(new Error("Only PNG images are allowed."));
-  }
-  if (file.size > 4_000_000) {
-    return Promise.reject(new Error("PNG must be under 4MB."));
-  }
-
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const { result } = reader;
-      if (typeof result === "string" && result.startsWith("data:image/png")) {
-        resolve(result);
-      } else {
-        reject(new Error("Could not read PNG image."));
-      }
-    };
-    reader.onerror = () => reject(new Error("Failed to read image file."));
-    reader.readAsDataURL(file);
-  });
-}
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -96,6 +81,8 @@ function firstSliderValue(value: number | readonly number[]): number {
 }
 
 type TradeStepId = "ticker" | "result" | "chart" | "hri" | "notes";
+type ChartSlot = "entry" | "exit";
+type ClearTarget = ChartSlot | "voice";
 
 const tradeSteps = [
   { id: "ticker", label: "Ticker", title: "Contract" },
@@ -110,17 +97,38 @@ const tickerOptions = [
   { description: "Micro S&P 500", value: "MES" as const },
 ] as const;
 
+const chartModeOptions = [
+  {
+    description: "One screenshot for the whole trade",
+    label: "One image",
+    value: "single" as const,
+  },
+  {
+    description: "Separate captures for entry and exit",
+    label: "Entry + Exit",
+    value: "entry_exit" as const,
+  },
+] as const;
+
 function ChartImageDropzone({
-  chartImage,
+  active,
+  emptyHint,
+  image,
   isDragging,
+  label,
+  onActivate,
   onDragLeave,
   onDragOver,
   onDrop,
   onPick,
   onRemove,
 }: {
-  chartImage: string | null;
+  active?: boolean;
+  emptyHint?: string;
+  image: string | null;
   isDragging: boolean;
+  label: string;
+  onActivate?: () => void;
   onDragLeave: () => void;
   onDragOver: (event: DragEvent<HTMLDivElement>) => void;
   onDrop: (event: DragEvent<HTMLDivElement>) => void;
@@ -131,26 +139,35 @@ function ChartImageDropzone({
     <Card
       className={cn(
         "border-dashed transition-colors",
+        active && "ring-2 ring-strong/25",
         isDragging && "border-strong bg-selected ring-2 ring-strong/20"
       )}
+      onClick={onActivate}
       onDragLeave={onDragLeave}
       onDragOver={onDragOver}
       onDrop={onDrop}
       size="sm"
     >
-      <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
-        {chartImage ? (
+      <CardContent className="flex flex-col items-center gap-3 py-6 text-center">
+        <div className="flex w-full items-center justify-between gap-2">
+          <p className="font-medium text-sm text-strong">{label}</p>
+          {active ? <Badge variant="secondary">Paste target</Badge> : null}
+        </div>
+        {image ? (
           <>
             <img
-              alt="Trade chart"
-              className="max-h-44 w-full rounded-lg object-contain ring-1 ring-border"
-              height={176}
-              src={chartImage}
+              alt={label}
+              className="max-h-40 w-full rounded-lg object-contain ring-1 ring-border"
+              height={160}
+              src={image}
               width={480}
             />
             <div className="flex flex-wrap justify-center gap-2">
               <Button
-                onClick={onPick}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPick();
+                }}
                 size="sm"
                 type="button"
                 variant="outline"
@@ -159,7 +176,10 @@ function ChartImageDropzone({
                 Replace
               </Button>
               <Button
-                onClick={onRemove}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove();
+                }}
                 size="sm"
                 type="button"
                 variant="destructive"
@@ -176,15 +196,18 @@ function ChartImageDropzone({
             </div>
             <div className="space-y-1">
               <p className="font-medium text-sm text-strong">
-                Drop or paste chart
+                Drop, paste, or pick
               </p>
               <p className="text-muted-foreground text-xs">
-                PNG only · max 4MB
+                {emptyHint ?? "PNG, JPEG, or WebP · max 4MB"}
               </p>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
               <Button
-                onClick={onPick}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPick();
+                }}
                 size="sm"
                 type="button"
                 variant="outline"
@@ -226,23 +249,28 @@ function StepHeader({
 function TradeFormStep({
   anxietyLevel,
   chartImage,
-  confluenceScore,
-  isDragging,
+  chartMode,
+  confluenceChecklist,
+  draggingSlot,
+  exitImage,
   isRecording,
   notesText,
-  onClearChart,
+  onClearChartSlot,
   onClearVoice,
   onDragLeave,
   onDragOver,
   onDrop,
   onPickChart,
+  onSelectChartMode,
+  onSelectChartSlot,
   onSelectTicker,
   onStartRecording,
   onStopRecording,
+  pasteSlot,
   pnl,
   positionSize,
   setAnxietyLevel,
-  setConfluenceScore,
+  setConfluenceChecklist,
   setNotesText,
   setPnl,
   setPositionSize,
@@ -252,23 +280,28 @@ function TradeFormStep({
 }: {
   anxietyLevel: number;
   chartImage: string | null;
-  confluenceScore: number;
-  isDragging: boolean;
+  chartMode: ChartImageMode;
+  confluenceChecklist: ConfluenceChecklist;
+  draggingSlot: ChartSlot | null;
+  exitImage: string | null;
   isRecording: boolean;
   notesText: string;
-  onClearChart: () => void;
+  onClearChartSlot: (slot: ChartSlot) => void;
   onClearVoice: () => void;
   onDragLeave: () => void;
-  onDragOver: (event: DragEvent<HTMLDivElement>) => void;
-  onDrop: (event: DragEvent<HTMLDivElement>) => void;
-  onPickChart: () => void;
+  onDragOver: (slot: ChartSlot, event: DragEvent<HTMLDivElement>) => void;
+  onDrop: (slot: ChartSlot, event: DragEvent<HTMLDivElement>) => void;
+  onPickChart: (slot: ChartSlot) => void;
+  onSelectChartMode: (mode: ChartImageMode) => void;
+  onSelectChartSlot: (slot: ChartSlot) => void;
   onSelectTicker: (value: Ticker) => void;
   onStartRecording: () => void;
   onStopRecording: () => void;
+  pasteSlot: ChartSlot;
   pnl: string;
   positionSize: string;
   setAnxietyLevel: (value: number) => void;
-  setConfluenceScore: (value: number) => void;
+  setConfluenceChecklist: (value: ConfluenceChecklist) => void;
   setNotesText: (value: string) => void;
   setPnl: (value: string) => void;
   setPositionSize: (value: string) => void;
@@ -376,18 +409,86 @@ function TradeFormStep({
     return (
       <div>
         <StepHeader
-          description="PNG only — paste, drop, or pick."
+          description="Attach one chart, or separate entry and exit captures."
           title="Chart"
         />
-        <ChartImageDropzone
-          chartImage={chartImage}
-          isDragging={isDragging}
-          onDragLeave={onDragLeave}
-          onDragOver={onDragOver}
-          onDrop={onDrop}
-          onPick={onPickChart}
-          onRemove={onClearChart}
-        />
+        <RadioGroup
+          className="mb-4 grid grid-cols-2 gap-2"
+          onValueChange={(value) => {
+            if (value === "single" || value === "entry_exit") {
+              onSelectChartMode(value);
+            }
+          }}
+          value={chartMode}
+        >
+          {chartModeOptions.map((option) => {
+            const selected = chartMode === option.value;
+            return (
+              <FieldLabel
+                className={cn(
+                  "flex cursor-pointer flex-col gap-0.5 rounded-xl border px-3 py-3 transition-colors",
+                  selected
+                    ? "border-strong bg-selected"
+                    : "border-border hover:bg-selected/60"
+                )}
+                key={option.value}
+              >
+                <RadioGroupItem className="sr-only" value={option.value} />
+                <span className="font-medium text-sm text-strong">
+                  {option.label}
+                </span>
+                <span className="text-muted-foreground text-xs leading-snug">
+                  {option.description}
+                </span>
+              </FieldLabel>
+            );
+          })}
+        </RadioGroup>
+
+        {chartMode === "single" ? (
+          <ChartImageDropzone
+            image={chartImage}
+            isDragging={draggingSlot === "entry"}
+            label="Chart"
+            onDragLeave={onDragLeave}
+            onDragOver={(e) => onDragOver("entry", e)}
+            onDrop={(e) => onDrop("entry", e)}
+            onPick={() => onPickChart("entry")}
+            onRemove={() => onClearChartSlot("entry")}
+          />
+        ) : (
+          <div className="grid gap-3">
+            <ChartImageDropzone
+              active={pasteSlot === "entry"}
+              emptyHint="Entry screenshot · PNG/JPEG/WebP · 4MB"
+              image={chartImage}
+              isDragging={draggingSlot === "entry"}
+              label="Entry"
+              onActivate={() => onSelectChartSlot("entry")}
+              onDragLeave={onDragLeave}
+              onDragOver={(e) => onDragOver("entry", e)}
+              onDrop={(e) => onDrop("entry", e)}
+              onPick={() => onPickChart("entry")}
+              onRemove={() => onClearChartSlot("entry")}
+            />
+            <ChartImageDropzone
+              active={pasteSlot === "exit"}
+              emptyHint="Exit screenshot · PNG/JPEG/WebP · 4MB"
+              image={exitImage}
+              isDragging={draggingSlot === "exit"}
+              label="Exit"
+              onActivate={() => onSelectChartSlot("exit")}
+              onDragLeave={onDragLeave}
+              onDragOver={(e) => onDragOver("exit", e)}
+              onDrop={(e) => onDrop("exit", e)}
+              onPick={() => onPickChart("exit")}
+              onRemove={() => onClearChartSlot("exit")}
+            />
+            <p className="text-muted-foreground text-xs">
+              Click a panel to choose where paste goes (marked Paste target).
+            </p>
+          </div>
+        )}
       </div>
     );
   }
@@ -396,30 +497,15 @@ function TradeFormStep({
     return (
       <div>
         <StepHeader
-          description="Setup quality and how you felt in the trade."
+          description="Checklist scores setup quality; anxiety is how the size felt."
           title="Heart Rate Index"
         />
         <FieldSet className="gap-5">
-          <Field>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <FieldLabel className="mb-0">Confluence</FieldLabel>
-              <span className="font-medium text-sm text-strong tabular-nums">
-                {confluenceScore}/5
-              </span>
-            </div>
-            <Slider
-              max={5}
-              min={1}
-              onValueChange={(value) => {
-                setConfluenceScore(firstSliderValue(value));
-              }}
-              step={1}
-              value={[confluenceScore]}
-            />
-            <FieldDescription className="mt-2">
-              1 weak · 5 A+ setup
-            </FieldDescription>
-          </Field>
+          <ConfluenceChecklistFields
+            checklist={confluenceChecklist}
+            onChange={setConfluenceChecklist}
+            ticker={ticker}
+          />
 
           <Field>
             <div className="mb-2 flex items-center justify-between gap-2">
@@ -529,9 +615,37 @@ function TradeFormStep({
   );
 }
 
+function clearTargetTitle(target: ClearTarget | null): string {
+  if (target === "entry") {
+    return "Remove entry chart?";
+  }
+  if (target === "exit") {
+    return "Remove exit chart?";
+  }
+  return "Clear voice note?";
+}
+
+function clearTargetDescription(target: ClearTarget | null): string {
+  if (target === "entry") {
+    return "This removes the entry (or single) chart image from the unsaved trade form.";
+  }
+  if (target === "exit") {
+    return "This removes the exit chart image from the unsaved trade form.";
+  }
+  return "This removes the recorded voice note from the unsaved trade form.";
+}
+
+function clearTargetConfirmLabel(target: ClearTarget | null): string {
+  if (target === "entry" || target === "exit") {
+    return "Remove image";
+  }
+  return "Clear voice";
+}
+
 export function TradeForm({ onSaved }: { onSaved?: () => void }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pickSlotRef = useRef<ChartSlot>("entry");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -540,35 +654,41 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
   const [positionSize, setPositionSize] = useState(
     DEFAULT_TRADE_FORM.positionSize
   );
-  const [confluenceScore, setConfluenceScore] = useState(
-    DEFAULT_TRADE_FORM.confluenceScore
-  );
+  const [confluenceChecklist, setConfluenceChecklist] =
+    useState<ConfluenceChecklist>(DEFAULT_TRADE_FORM.confluenceChecklist);
   const [anxietyLevel, setAnxietyLevel] = useState(
     DEFAULT_TRADE_FORM.anxietyLevel
+  );
+  const [chartMode, setChartMode] = useState<ChartImageMode>(
+    DEFAULT_TRADE_FORM.chartMode
   );
   const [chartImage, setChartImage] = useState<string | null>(
     DEFAULT_TRADE_FORM.chartImage
   );
+  const [exitImage, setExitImage] = useState<string | null>(
+    DEFAULT_TRADE_FORM.exitImage
+  );
+  const [pasteSlot, setPasteSlot] = useState<ChartSlot>("entry");
+  const [draggingSlot, setDraggingSlot] = useState<ChartSlot | null>(null);
   const [notesText, setNotesText] = useState(DEFAULT_TRADE_FORM.notesText);
   const [voiceNote, setVoiceNote] = useState<string | null>(
     DEFAULT_TRADE_FORM.voiceNote
   );
   const [voiceNoteMime, setVoiceNoteMime] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
-  const [clearTarget, setClearTarget] = useState<"chart" | "voice" | null>(
-    null
-  );
+  const [clearTarget, setClearTarget] = useState<ClearTarget | null>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
 
   const snapshot: TradeFormSnapshot = useMemo(
     () => ({
       anxietyLevel,
       chartImage,
-      confluenceScore,
+      chartMode,
+      confluenceChecklist,
+      exitImage,
       notesText,
       pnl,
       positionSize,
@@ -579,29 +699,35 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
       ticker,
       pnl,
       positionSize,
-      confluenceScore,
+      confluenceChecklist,
       anxietyLevel,
+      chartMode,
       chartImage,
+      exitImage,
       notesText,
       voiceNote,
     ]
   );
 
   const dirty = isTradeFormDirty(snapshot);
+  const chartReady = isChartStepComplete(snapshot);
 
   const checklist = useMemo(() => {
     const hasPnl = pnl.trim().length > 0;
     const hasSize = positionSize.trim().length > 0;
-    const hasChart = Boolean(chartImage);
     const hasNotes = notesText.trim().length > 0 || Boolean(voiceNote);
     return [
       { done: true, id: "ticker", label: "Ticker" },
       { done: hasPnl, id: "pnl", label: "P&L" },
       { done: hasSize, id: "size", label: "Size" },
-      { done: hasChart, id: "chart", label: "Chart" },
+      {
+        done: chartReady,
+        id: "chart",
+        label: chartMode === "entry_exit" ? "Charts" : "Chart",
+      },
       { done: hasNotes, id: "notes", label: "Notes" },
     ];
-  }, [pnl, positionSize, chartImage, notesText, voiceNote]);
+  }, [pnl, positionSize, chartReady, chartMode, notesText, voiceNote]);
 
   const readyCount = checklist.filter((c) => c.done).length;
   const missingItems = checklist.filter((item) => !item.done);
@@ -610,29 +736,45 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
   const currentStepId = currentStep.id;
   const isFirstStep = currentStepIndex === 0;
   const isLastStep = currentStepIndex === tradeSteps.length - 1;
+  const confluenceReady =
+    validateConfluenceChecklist(confluenceChecklist) === null;
   const currentStepReady =
     currentStepId === "ticker" ||
-    currentStepId === "hri" ||
+    (currentStepId === "hri" && confluenceReady) ||
     (currentStepId === "result" &&
       pnl.trim().length > 0 &&
       positionSize.trim().length > 0) ||
-    (currentStepId === "chart" && Boolean(chartImage)) ||
+    (currentStepId === "chart" && chartReady) ||
     (currentStepId === "notes" &&
       (notesText.trim().length > 0 || Boolean(voiceNote)));
 
-  const setImageFromFile = useCallback(async (file: File) => {
-    try {
-      const dataUrl = await fileToPngDataUrl(file);
-      setChartImage(dataUrl);
-      setError(null);
-      toast.success("Chart image attached");
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Could not attach image.";
-      setError(message);
-      toast.error(message);
-    }
-  }, []);
+  const setImageForSlot = useCallback(
+    async (slot: ChartSlot, file: File) => {
+      try {
+        const dataUrl = await fileToChartDataUrl(file);
+        if (slot === "exit") {
+          setExitImage(dataUrl);
+          setPasteSlot("exit");
+          toast.success("Exit chart attached");
+        } else {
+          setChartImage(dataUrl);
+          setPasteSlot("entry");
+          toast.success(
+            chartMode === "entry_exit"
+              ? "Entry chart attached"
+              : "Chart image attached"
+          );
+        }
+        setError(null);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Could not attach image.";
+        setError(message);
+        toast.error(message);
+      }
+    },
+    [chartMode]
+  );
 
   useEffect(() => {
     function onPaste(event: ClipboardEvent) {
@@ -642,22 +784,26 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
       }
 
       for (const item of items) {
-        if (item.type === "image/png") {
-          event.preventDefault();
-          const file = item.getAsFile();
-          if (file) {
-            setImageFromFile(file).catch(() => {
-              // Errors are handled inside setImageFromFile.
-            });
-          }
+        if (!item.type.startsWith("image/")) {
+          continue;
+        }
+        event.preventDefault();
+        const file = item.getAsFile();
+        if (!file) {
           return;
         }
+        const slot =
+          chartMode === "entry_exit" && pasteSlot === "exit" ? "exit" : "entry";
+        setImageForSlot(slot, file).catch(() => {
+          // Errors are handled inside setImageForSlot.
+        });
+        return;
       }
     }
 
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [setImageFromFile]);
+  }, [chartMode, pasteSlot, setImageForSlot]);
 
   useEffect(() => {
     if (!dirty) {
@@ -727,10 +873,25 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
     setVoiceNoteMime(null);
   }
 
-  function clearChart() {
-    setChartImage(null);
+  function clearChartSlot(slot: ChartSlot) {
+    if (slot === "exit") {
+      setExitImage(null);
+    } else {
+      setChartImage(null);
+    }
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
+    }
+  }
+
+  function onSelectChartMode(mode: ChartImageMode) {
+    setChartMode(mode);
+    setError(null);
+    if (mode === "single") {
+      setExitImage(null);
+      setPasteSlot("entry");
+    } else {
+      setPasteSlot(chartImage && !exitImage ? "exit" : "entry");
     }
   }
 
@@ -738,9 +899,13 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
     setTicker(DEFAULT_TRADE_FORM.ticker);
     setPnl(DEFAULT_TRADE_FORM.pnl);
     setPositionSize(DEFAULT_TRADE_FORM.positionSize);
-    setConfluenceScore(DEFAULT_TRADE_FORM.confluenceScore);
+    setConfluenceChecklist(DEFAULT_TRADE_FORM.confluenceChecklist);
     setAnxietyLevel(DEFAULT_TRADE_FORM.anxietyLevel);
+    setChartMode(DEFAULT_TRADE_FORM.chartMode);
     setChartImage(DEFAULT_TRADE_FORM.chartImage);
+    setExitImage(DEFAULT_TRADE_FORM.exitImage);
+    setPasteSlot("entry");
+    setDraggingSlot(null);
     setNotesText(DEFAULT_TRADE_FORM.notesText);
     clearVoice();
     setError(null);
@@ -751,9 +916,11 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
   }
 
   function onConfirmClearAttachment() {
-    if (clearTarget === "chart") {
-      clearChart();
-      toast.message("Chart removed");
+    if (clearTarget === "entry" || clearTarget === "exit") {
+      clearChartSlot(clearTarget);
+      toast.message(
+        clearTarget === "exit" ? "Exit chart removed" : "Chart removed"
+      );
     }
     if (clearTarget === "voice") {
       clearVoice();
@@ -779,10 +946,20 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
   function goNext() {
     setError(null);
     if (!currentStepReady) {
-      const missingLabel =
-        currentStepId === "result"
-          ? "P&L and position size"
-          : currentStep.label.toLowerCase();
+      if (currentStepId === "hri") {
+        const checklistError = validateConfluenceChecklist(confluenceChecklist);
+        setError(
+          checklistError ??
+            "Complete the confluence checklist before continuing."
+        );
+        return;
+      }
+      let missingLabel = currentStep.label.toLowerCase();
+      if (currentStepId === "result") {
+        missingLabel = "P&L and position size";
+      } else if (currentStepId === "chart" && chartMode === "entry_exit") {
+        missingLabel = "entry and exit charts";
+      }
       setError(`Complete ${missingLabel} before continuing.`);
       return;
     }
@@ -806,8 +983,12 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
     event.preventDefault();
     setError(null);
 
-    if (!chartImage) {
-      setError("A PNG chart image is required.");
+    if (!isChartStepComplete(snapshot)) {
+      setError(
+        chartMode === "entry_exit"
+          ? "Entry and exit chart images are required."
+          : "A chart image is required."
+      );
       return;
     }
     if (!(notesText.trim() || voiceNote)) {
@@ -819,9 +1000,16 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
     formData.set("ticker", ticker);
     formData.set("pnl", pnl);
     formData.set("positionSize", positionSize);
-    formData.set("confluenceScore", String(confluenceScore));
+    formData.set(
+      "confluenceChecklist",
+      serializeConfluenceChecklist(confluenceChecklist)
+    );
     formData.set("anxietyLevel", String(anxietyLevel));
-    formData.set("chartImage", chartImage);
+    formData.set("chartMode", chartMode);
+    formData.set("chartImage", chartImage ?? "");
+    if (chartMode === "entry_exit" && exitImage) {
+      formData.set("exitImage", exitImage);
+    }
     formData.set("notesText", notesText);
     if (voiceNote) {
       formData.set("voiceNote", voiceNote);
@@ -927,13 +1115,13 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
 
         <form onSubmit={onSubmit}>
           <input
-            accept="image/png"
+            accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
             className="sr-only"
             onChange={(e) => {
               const [file] = e.target.files ?? [];
               if (file) {
-                setImageFromFile(file).catch(() => {
-                  // Errors are handled inside setImageFromFile.
+                setImageForSlot(pickSlotRef.current, file).catch(() => {
+                  // Errors are handled inside setImageForSlot.
                 });
               }
             }}
@@ -945,28 +1133,37 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
             <TradeFormStep
               anxietyLevel={anxietyLevel}
               chartImage={chartImage}
-              confluenceScore={confluenceScore}
-              isDragging={isDragging}
+              chartMode={chartMode}
+              confluenceChecklist={confluenceChecklist}
+              draggingSlot={draggingSlot}
+              exitImage={exitImage}
               isRecording={isRecording}
               notesText={notesText}
-              onClearChart={() => setClearTarget("chart")}
+              onClearChartSlot={(slot) => setClearTarget(slot)}
               onClearVoice={() => setClearTarget("voice")}
-              onDragLeave={() => setIsDragging(false)}
-              onDragOver={(e) => {
+              onDragLeave={() => setDraggingSlot(null)}
+              onDragOver={(slot, e) => {
                 e.preventDefault();
-                setIsDragging(true);
+                setDraggingSlot(slot);
               }}
-              onDrop={(e) => {
+              onDrop={(slot, e) => {
                 e.preventDefault();
-                setIsDragging(false);
+                setDraggingSlot(null);
+                setPasteSlot(slot);
                 const [file] = e.dataTransfer.files;
                 if (file) {
-                  setImageFromFile(file).catch(() => {
-                    // Errors are handled inside setImageFromFile.
+                  setImageForSlot(slot, file).catch(() => {
+                    // Errors are handled inside setImageForSlot.
                   });
                 }
               }}
-              onPickChart={() => fileInputRef.current?.click()}
+              onPickChart={(slot) => {
+                pickSlotRef.current = slot;
+                setPasteSlot(slot);
+                fileInputRef.current?.click();
+              }}
+              onSelectChartMode={onSelectChartMode}
+              onSelectChartSlot={setPasteSlot}
               onSelectTicker={onSelectTicker}
               onStartRecording={() => {
                 startRecording().catch(() => {
@@ -974,10 +1171,11 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
                 });
               }}
               onStopRecording={stopRecording}
+              pasteSlot={pasteSlot}
               pnl={pnl}
               positionSize={positionSize}
               setAnxietyLevel={setAnxietyLevel}
-              setConfluenceScore={setConfluenceScore}
+              setConfluenceChecklist={setConfluenceChecklist}
               setNotesText={setNotesText}
               setPnl={setPnl}
               setPositionSize={setPositionSize}
@@ -1053,7 +1251,7 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
       <ConfirmDialog
         cancelLabel="Keep editing"
         confirmLabel="Clear form"
-        description="You have unsaved changes. Resetting will discard the chart, P&L, notes, and metrics currently entered."
+        description="You have unsaved changes. Resetting will discard charts, P&L, notes, and metrics currently entered."
         onConfirm={onConfirmReset}
         onOpenChange={setResetConfirmOpen}
         open={resetConfirmOpen}
@@ -1063,12 +1261,8 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
 
       <ConfirmDialog
         cancelLabel="Keep it"
-        confirmLabel={clearTarget === "chart" ? "Remove chart" : "Clear voice"}
-        description={
-          clearTarget === "chart"
-            ? "This removes the attached chart image from the unsaved trade form."
-            : "This removes the recorded voice note from the unsaved trade form."
-        }
+        confirmLabel={clearTargetConfirmLabel(clearTarget)}
+        description={clearTargetDescription(clearTarget)}
         onConfirm={onConfirmClearAttachment}
         onOpenChange={(open) => {
           if (!open) {
@@ -1076,9 +1270,7 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
           }
         }}
         open={clearTarget !== null}
-        title={
-          clearTarget === "chart" ? "Remove chart image?" : "Clear voice note?"
-        }
+        title={clearTargetTitle(clearTarget)}
         variant="destructive"
       />
     </>

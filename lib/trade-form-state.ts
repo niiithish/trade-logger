@@ -1,10 +1,18 @@
-import type { Ticker } from "@/lib/types";
+import {
+  areConfluenceChecklistsEqual,
+  type ConfluenceChecklist,
+  DEFAULT_CONFLUENCE_CHECKLIST,
+  scoreConfluence,
+} from "@/lib/confluence";
+import type { ChartImageMode, Ticker } from "@/lib/types";
 
 /** Snapshot of log-trade form fields used for dirty detection and reset. */
 export interface TradeFormSnapshot {
   anxietyLevel: number;
   chartImage: string | null;
-  confluenceScore: number;
+  chartMode: ChartImageMode;
+  confluenceChecklist: ConfluenceChecklist;
+  exitImage: string | null;
   notesText: string;
   pnl: string;
   positionSize: string;
@@ -15,7 +23,9 @@ export interface TradeFormSnapshot {
 export const DEFAULT_TRADE_FORM: TradeFormSnapshot = {
   anxietyLevel: 3,
   chartImage: null,
-  confluenceScore: 3,
+  chartMode: "single",
+  confluenceChecklist: DEFAULT_CONFLUENCE_CHECKLIST,
+  exitImage: null,
   notesText: "",
   pnl: "",
   positionSize: "",
@@ -35,10 +45,34 @@ export function isTradeFormDirty(
     state.ticker !== defaults.ticker ||
     state.pnl !== defaults.pnl ||
     state.positionSize !== defaults.positionSize ||
-    state.confluenceScore !== defaults.confluenceScore ||
+    !areConfluenceChecklistsEqual(
+      state.confluenceChecklist,
+      defaults.confluenceChecklist
+    ) ||
     state.anxietyLevel !== defaults.anxietyLevel ||
+    state.chartMode !== defaults.chartMode ||
     state.chartImage !== defaults.chartImage ||
+    state.exitImage !== defaults.exitImage ||
     state.notesText.trim() !== defaults.notesText.trim() ||
     state.voiceNote !== defaults.voiceNote
   );
+}
+
+/** Whether the chart step has everything required for the selected mode. */
+export function isChartStepComplete(
+  state: Pick<TradeFormSnapshot, "chartImage" | "chartMode" | "exitImage">
+): boolean {
+  if (!state.chartImage) {
+    return false;
+  }
+  if (state.chartMode === "entry_exit") {
+    return Boolean(state.exitImage);
+  }
+  return true;
+}
+
+export function confluenceScoreFromSnapshot(
+  state: Pick<TradeFormSnapshot, "confluenceChecklist">
+): number {
+  return scoreConfluence(state.confluenceChecklist);
 }

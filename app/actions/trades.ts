@@ -1,8 +1,15 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { chartImageValidationError } from "@/lib/chart-image";
+import {
+  MAX_CONFLUENCE_SCORE,
+  parseConfluenceChecklist,
+  scoreConfluence,
+  validateConfluenceChecklist,
+} from "@/lib/confluence";
 import { createTrade, deleteTrade } from "@/lib/trades";
-import type { Ticker } from "@/lib/types";
+import type { ChartImageMode, Ticker } from "@/lib/types";
 
 export type ActionResult =
   | { success: true; id: string }
@@ -34,10 +41,18 @@ function revalidateTradePaths(id?: string) {
 }
 
 function parseCreateTradeFields(formData: FormData) {
+  const chartModeRaw = asString(formData.get("chartMode"));
+  const chartMode: ChartImageMode =
+    chartModeRaw === "entry_exit" ? "entry_exit" : "single";
+  const checklistRaw = asString(formData.get("confluenceChecklist"));
+  const confluenceChecklist = parseConfluenceChecklist(checklistRaw);
+
   return {
     anxietyLevel: asNumber(formData.get("anxietyLevel")),
     chartImage: asString(formData.get("chartImage")),
-    confluenceScore: asNumber(formData.get("confluenceScore")),
+    chartMode,
+    confluenceChecklist,
+    exitImage: asString(formData.get("exitImage")) || null,
     notesText: asString(formData.get("notesText")) || null,
     pnl: asNumber(formData.get("pnl")),
     positionSize: asNumber(formData.get("positionSize")),
@@ -47,19 +62,10 @@ function parseCreateTradeFields(formData: FormData) {
   };
 }
 
-function validateCreateTradeFields(
+function validateTradeCoreFields(
   fields: ReturnType<typeof parseCreateTradeFields>
 ): string | null {
-  const {
-    anxietyLevel,
-    chartImage,
-    confluenceScore,
-    notesText,
-    pnl,
-    positionSize,
-    ticker,
-    voiceNote,
-  } = fields;
+  const { anxietyLevel, pnl, positionSize, ticker } = fields;
 
   if (ticker !== "MNQ" && ticker !== "MES") {
     return "Ticker must be MNQ or MES.";
@@ -71,14 +77,6 @@ function validateCreateTradeFields(
     return "Position size must be greater than 0.";
   }
   if (
-    confluenceScore === null ||
-    confluenceScore < 1 ||
-    confluenceScore > 5 ||
-    !Number.isInteger(confluenceScore)
-  ) {
-    return "Confluence score must be a whole number from 1 to 5.";
-  }
-  if (
     anxietyLevel === null ||
     anxietyLevel < 1 ||
     anxietyLevel > 10 ||
@@ -86,20 +84,68 @@ function validateCreateTradeFields(
   ) {
     return "Anxiety level must be a whole number from 1 to 10.";
   }
-  if (!chartImage.startsWith("data:image/png")) {
-    return "A PNG chart image is required.";
+  return null;
+}
+
+function validateTradeMediaFields(
+  fields: ReturnType<typeof parseCreateTradeFields>
+): string | null {
+  const { chartImage, chartMode, exitImage, notesText, voiceNote } = fields;
+
+  const primaryLabel =
+    chartMode === "entry_exit" ? "Entry chart image" : "Chart image";
+  const chartError = chartImageValidationError(chartImage, primaryLabel);
+  if (chartError) {
+    return chartError;
   }
+
+  if (chartMode === "entry_exit") {
+    const exitError = chartImageValidationError(
+      exitImage ?? "",
+      "Exit chart image"
+    );
+    if (exitError) {
+      return exitError;
+    }
+  } else if (exitImage) {
+    return "Remove the exit image or switch to Entry + Exit mode.";
+  }
+
   if (!(notesText || voiceNote)) {
     return "Add a text note or record a voice note.";
-  }
-  if (chartImage.length > 5_500_000) {
-    return "Chart image is too large. Please use a smaller PNG.";
   }
   if (voiceNote && voiceNote.length > 8_000_000) {
     return "Voice note is too large. Keep recordings under ~1 minute.";
   }
-
   return null;
+}
+
+function validateTradeConfluenceFields(
+  fields: ReturnType<typeof parseCreateTradeFields>
+): string | null {
+  const { confluenceChecklist } = fields;
+  if (!confluenceChecklist) {
+    return "Confluence checklist is required.";
+  }
+  const checklistError = validateConfluenceChecklist(confluenceChecklist);
+  if (checklistError) {
+    return checklistError;
+  }
+  const score = scoreConfluence(confluenceChecklist);
+  if (score < 0 || score > MAX_CONFLUENCE_SCORE) {
+    return `Confluence score must be between 0 and ${MAX_CONFLUENCE_SCORE}.`;
+  }
+  return null;
+}
+
+function validateCreateTradeFields(
+  fields: ReturnType<typeof parseCreateTradeFields>
+): string | null {
+  return (
+    validateTradeCoreFields(fields) ??
+    validateTradeConfluenceFields(fields) ??
+    validateTradeMediaFields(fields)
+  );
 }
 
 export async function createTradeAction(
@@ -115,7 +161,9 @@ export async function createTradeAction(
     const {
       anxietyLevel,
       chartImage,
-      confluenceScore,
+      chartMode,
+      confluenceChecklist,
+      exitImage,
       notesText,
       pnl,
       positionSize,
@@ -128,8 +176,8 @@ export async function createTradeAction(
     if (
       pnl === null ||
       positionSize === null ||
-      confluenceScore === null ||
-      anxietyLevel === null
+      anxietyLevel === null ||
+      !confluenceChecklist
     ) {
       return fail("Invalid trade fields.");
     }
@@ -137,7 +185,9 @@ export async function createTradeAction(
     const trade = await createTrade({
       anxietyLevel,
       chartImage,
-      confluenceScore,
+      confluenceChecklist,
+      confluenceScore: scoreConfluence(confluenceChecklist),
+      exitImage: chartMode === "entry_exit" ? exitImage : null,
       notesText,
       pnl,
       positionSize,

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
+import { DEFAULT_CONFLUENCE_CHECKLIST } from "./confluence";
 import {
   DEFAULT_TRADE_FORM,
+  isChartStepComplete,
   isTradeFormDirty,
   type TradeFormSnapshot,
 } from "./trade-form-state";
@@ -28,7 +30,13 @@ describe("isTradeFormDirty", () => {
       true
     );
     expect(
-      isTradeFormDirty({ ...DEFAULT_TRADE_FORM, confluenceScore: 5 })
+      isTradeFormDirty({
+        ...DEFAULT_TRADE_FORM,
+        confluenceChecklist: {
+          ...DEFAULT_CONFLUENCE_CHECKLIST,
+          tempoTookIt: true,
+        },
+      })
     ).toBe(true);
     expect(isTradeFormDirty({ ...DEFAULT_TRADE_FORM, anxietyLevel: 8 })).toBe(
       true
@@ -37,6 +45,18 @@ describe("isTradeFormDirty", () => {
       isTradeFormDirty({
         ...DEFAULT_TRADE_FORM,
         chartImage: "data:image/png;base64,abc",
+      })
+    ).toBe(true);
+    expect(
+      isTradeFormDirty({
+        ...DEFAULT_TRADE_FORM,
+        chartMode: "entry_exit",
+      })
+    ).toBe(true);
+    expect(
+      isTradeFormDirty({
+        ...DEFAULT_TRADE_FORM,
+        exitImage: "data:image/jpeg;base64,xyz",
       })
     ).toBe(true);
     expect(
@@ -53,9 +73,59 @@ describe("isTradeFormDirty", () => {
   test("matching custom defaults is not dirty", () => {
     const custom: TradeFormSnapshot = {
       ...DEFAULT_TRADE_FORM,
-      confluenceScore: 4,
+      anxietyLevel: 4,
       ticker: "MES",
     };
     expect(isTradeFormDirty(custom, custom)).toBe(false);
+  });
+});
+
+describe("isChartStepComplete", () => {
+  test("single mode needs only primary chart", () => {
+    expect(
+      isChartStepComplete({
+        chartImage: null,
+        chartMode: "single",
+        exitImage: null,
+      })
+    ).toBe(false);
+    expect(
+      isChartStepComplete({
+        chartImage: "data:image/png;base64,a",
+        chartMode: "single",
+        exitImage: null,
+      })
+    ).toBe(true);
+    expect(
+      isChartStepComplete({
+        chartImage: "data:image/png;base64,a",
+        chartMode: "single",
+        exitImage: "data:image/png;base64,b",
+      })
+    ).toBe(true);
+  });
+
+  test("entry_exit mode needs both images", () => {
+    expect(
+      isChartStepComplete({
+        chartImage: "data:image/png;base64,a",
+        chartMode: "entry_exit",
+        exitImage: null,
+      })
+    ).toBe(false);
+    expect(
+      isChartStepComplete({
+        chartImage: null,
+        chartMode: "entry_exit",
+        exitImage: "data:image/png;base64,b",
+      })
+    ).toBe(false);
+    expect(
+      isChartStepComplete({
+        chartImage: "data:image/png;base64,a",
+        chartMode: "entry_exit",
+        exitImage: "data:image/png;base64,b",
+      })
+    ).toBe(true);
   });
 });

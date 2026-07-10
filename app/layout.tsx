@@ -20,8 +20,8 @@ export const metadata: Metadata = {
   description:
     "Futures prop firm trade journal for MNQ/MES with Heart Rate Index metrics.",
   icons: {
-    apple: "/logo.svg",
-    icon: "/logo.svg",
+    apple: "/icon.svg",
+    icon: "/icon.svg",
   },
   title: "Trade Logger",
 };

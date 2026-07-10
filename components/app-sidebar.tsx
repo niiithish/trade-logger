@@ -9,11 +9,12 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { LogTradeButton } from "@/components/log-trade-dialog";
+import { useLogTradeDialog } from "@/components/log-trade-dialog";
 import { Logo } from "@/components/logo";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -45,6 +46,7 @@ const navItems = [
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const { openDialog } = useLogTradeDialog();
 
   function isActive(href: string) {
     if (href === "/") {
@@ -61,12 +63,14 @@ export function AppSidebar() {
             <SidebarMenuButton
               render={<Link href="/" />}
               size="lg"
-              tooltip="Trade Logger"
+              tooltip="TradeLogger"
             >
-              <Logo className="size-8 shrink-0" />
-              <span className="truncate font-medium text-strong tracking-tight">
-                Trade Logger
-              </span>
+              <Logo className="size-8!" />
+              <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-medium text-strong tracking-tight">
+                  TradeLogger
+                </span>
+              </div>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -98,19 +102,18 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-
-        <SidebarGroup className="mt-auto">
-          <SidebarGroupContent>
-            <LogTradeButton
-              className="mx-2 h-10 w-[calc(100%-1rem)] justify-start text-sm group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:[&>span]:sr-only"
-              size="lg"
-            >
-              <PlusCircleIcon data-icon="inline-start" />
-              <span>Log trade</span>
-            </LogTradeButton>
-          </SidebarGroupContent>
-        </SidebarGroup>
       </SidebarContent>
+
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={openDialog} tooltip="Log trade">
+              <PlusCircleIcon />
+              <span>Log trade</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
       <SidebarRail />
     </Sidebar>
   );

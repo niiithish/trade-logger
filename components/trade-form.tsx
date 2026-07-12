@@ -22,7 +22,8 @@ import {
 } from "react";
 import { toast } from "sonner";
 
-import { createTradeAction } from "@/app/actions/trades";
+import { createTradeAction, updateTradeAction } from "@/app/actions/trades";
+import { useAccountFilter } from "@/components/account-filter";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ConfluenceChecklistFields } from "@/components/confluence-checklist";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -41,6 +42,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { type AccountId, TRADING_ACCOUNTS } from "@/lib/accounts";
 import { fileToChartDataUrl } from "@/lib/chart-image";
 import { beginFormReset } from "@/lib/confirm-flow";
 import {
@@ -51,10 +53,24 @@ import {
 import {
   DEFAULT_TRADE_FORM,
   isChartStepComplete,
+  isManagementStepComplete,
+  isResultStepComplete,
   isTradeFormDirty,
   type TradeFormSnapshot,
+  tradeFormSnapshotFromTrade,
 } from "@/lib/trade-form-state";
-import type { ChartImageMode, Ticker } from "@/lib/types";
+import {
+  AFTER_TP1_OPTIONS,
+  type AfterTp1Stop,
+  type Direction,
+  EXIT_OUTCOME_OPTIONS,
+  type ExitOutcome,
+  isMistakeTag,
+  type ManagementStyle,
+  MISTAKE_TAG_OPTIONS,
+  type MistakeTag,
+} from "@/lib/trade-management";
+import type { ChartImageMode, Ticker, Trade } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -80,13 +96,20 @@ function firstSliderValue(value: number | readonly number[]): number {
   return value[0] ?? 3;
 }
 
-type TradeStepId = "ticker" | "result" | "chart" | "hri" | "notes";
+type TradeStepId =
+  | "contract"
+  | "result"
+  | "management"
+  | "chart"
+  | "hri"
+  | "notes";
 type ChartSlot = "entry" | "exit";
 type ClearTarget = ChartSlot | "voice";
 
 const tradeSteps = [
-  { id: "ticker", label: "Ticker", title: "Contract" },
+  { id: "contract", label: "Account", title: "Account & contract" },
   { id: "result", label: "Result", title: "Result" },
+  { id: "management", label: "Exit", title: "Exit management" },
   { id: "chart", label: "Chart", title: "Chart" },
   { id: "hri", label: "HRI", title: "Heart Rate Index" },
   { id: "notes", label: "Notes", title: "Notes" },
@@ -95,6 +118,11 @@ const tradeSteps = [
 const tickerOptions = [
   { description: "Micro Nasdaq-100", value: "MNQ" as const },
   { description: "Micro S&P 500", value: "MES" as const },
+] as const;
+
+const directionOptions = [
+  { description: "Bought / bullish", label: "Long", value: "long" as const },
+  { description: "Sold / bearish", label: "Short", value: "short" as const },
 ] as const;
 
 const chartModeOptions = [
@@ -246,371 +274,39 @@ function StepHeader({
   );
 }
 
-function TradeFormStep({
-  anxietyLevel,
-  chartImage,
-  chartMode,
-  confluenceChecklist,
-  draggingSlot,
-  exitImage,
-  isRecording,
-  notesText,
-  onClearChartSlot,
-  onClearVoice,
-  onDragLeave,
-  onDragOver,
-  onDrop,
-  onPickChart,
-  onSelectChartMode,
-  onSelectChartSlot,
-  onSelectTicker,
-  onStartRecording,
-  onStopRecording,
-  pasteSlot,
-  pnl,
-  positionSize,
-  setAnxietyLevel,
-  setConfluenceChecklist,
-  setNotesText,
-  setPnl,
-  setPositionSize,
-  step,
-  ticker,
-  voiceNote,
+function OptionCard({
+  description,
+  label,
+  selected,
+  titleClassName,
 }: {
-  anxietyLevel: number;
-  chartImage: string | null;
-  chartMode: ChartImageMode;
-  confluenceChecklist: ConfluenceChecklist;
-  draggingSlot: ChartSlot | null;
-  exitImage: string | null;
-  isRecording: boolean;
-  notesText: string;
-  onClearChartSlot: (slot: ChartSlot) => void;
-  onClearVoice: () => void;
-  onDragLeave: () => void;
-  onDragOver: (slot: ChartSlot, event: DragEvent<HTMLDivElement>) => void;
-  onDrop: (slot: ChartSlot, event: DragEvent<HTMLDivElement>) => void;
-  onPickChart: (slot: ChartSlot) => void;
-  onSelectChartMode: (mode: ChartImageMode) => void;
-  onSelectChartSlot: (slot: ChartSlot) => void;
-  onSelectTicker: (value: Ticker) => void;
-  onStartRecording: () => void;
-  onStopRecording: () => void;
-  pasteSlot: ChartSlot;
-  pnl: string;
-  positionSize: string;
-  setAnxietyLevel: (value: number) => void;
-  setConfluenceChecklist: (value: ConfluenceChecklist) => void;
-  setNotesText: (value: string) => void;
-  setPnl: (value: string) => void;
-  setPositionSize: (value: string) => void;
-  step: TradeStepId;
-  ticker: Ticker;
-  voiceNote: string | null;
+  description: string;
+  label: string;
+  selected: boolean;
+  titleClassName?: string;
 }) {
-  if (step === "ticker") {
-    return (
-      <div>
-        <StepHeader
-          description="Which micro contract did you trade?"
-          title="Contract"
-        />
-        <RadioGroup
-          className="grid grid-cols-2 gap-3"
-          onValueChange={(value) => {
-            if (value === "MNQ" || value === "MES") {
-              onSelectTicker(value);
-            }
-          }}
-          value={ticker}
-        >
-          {tickerOptions.map((option) => {
-            const selected = ticker === option.value;
-            return (
-              <FieldLabel
-                className={cn(
-                  "relative flex cursor-pointer flex-col items-start gap-1 rounded-xl border px-4 py-5 transition-colors",
-                  selected
-                    ? "border-strong bg-selected"
-                    : "border-border bg-transparent hover:bg-selected/60"
-                )}
-                key={option.value}
-              >
-                <RadioGroupItem className="sr-only" value={option.value} />
-                {selected ? (
-                  <span className="absolute top-3 right-3 flex size-5 items-center justify-center rounded-full bg-strong text-primary-foreground">
-                    <CheckIcon className="size-3" strokeWidth={3} />
-                  </span>
-                ) : null}
-                <span className="font-medium font-mono text-2xl text-strong tracking-tight">
-                  {option.value}
-                </span>
-                <span className="text-muted-foreground text-xs">
-                  {option.description}
-                </span>
-              </FieldLabel>
-            );
-          })}
-        </RadioGroup>
-      </div>
-    );
-  }
-
-  if (step === "result") {
-    return (
-      <div>
-        <StepHeader
-          description="Net dollars and how many contracts."
-          title="Result"
-        />
-        <div className="grid gap-4">
-          <Field>
-            <FieldLabel htmlFor="pnl">P&L ($)</FieldLabel>
-            <Input
-              autoFocus
-              className="h-11 font-mono text-base tabular-nums"
-              id="pnl"
-              inputMode="decimal"
-              name="pnl"
-              onChange={(e) => setPnl(e.target.value)}
-              placeholder="125.50 or -80"
-              required
-              step="0.01"
-              type="number"
-              value={pnl}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="positionSize">Position size</FieldLabel>
-            <Input
-              className="h-11 tabular-nums"
-              id="positionSize"
-              inputMode="numeric"
-              min="1"
-              name="positionSize"
-              onChange={(e) => setPositionSize(e.target.value)}
-              placeholder="Contracts"
-              required
-              step="1"
-              type="number"
-              value={positionSize}
-            />
-            <FieldDescription>
-              Size until it feels boring (Heart Rate Index).
-            </FieldDescription>
-          </Field>
-        </div>
-      </div>
-    );
-  }
-
-  if (step === "chart") {
-    return (
-      <div>
-        <StepHeader
-          description="Attach one chart, or separate entry and exit captures."
-          title="Chart"
-        />
-        <RadioGroup
-          className="mb-4 grid grid-cols-2 gap-2"
-          onValueChange={(value) => {
-            if (value === "single" || value === "entry_exit") {
-              onSelectChartMode(value);
-            }
-          }}
-          value={chartMode}
-        >
-          {chartModeOptions.map((option) => {
-            const selected = chartMode === option.value;
-            return (
-              <FieldLabel
-                className={cn(
-                  "flex cursor-pointer flex-col gap-0.5 rounded-xl border px-3 py-3 transition-colors",
-                  selected
-                    ? "border-strong bg-selected"
-                    : "border-border hover:bg-selected/60"
-                )}
-                key={option.value}
-              >
-                <RadioGroupItem className="sr-only" value={option.value} />
-                <span className="font-medium text-sm text-strong">
-                  {option.label}
-                </span>
-                <span className="text-muted-foreground text-xs leading-snug">
-                  {option.description}
-                </span>
-              </FieldLabel>
-            );
-          })}
-        </RadioGroup>
-
-        {chartMode === "single" ? (
-          <ChartImageDropzone
-            image={chartImage}
-            isDragging={draggingSlot === "entry"}
-            label="Chart"
-            onDragLeave={onDragLeave}
-            onDragOver={(e) => onDragOver("entry", e)}
-            onDrop={(e) => onDrop("entry", e)}
-            onPick={() => onPickChart("entry")}
-            onRemove={() => onClearChartSlot("entry")}
-          />
-        ) : (
-          <div className="grid gap-3">
-            <ChartImageDropzone
-              active={pasteSlot === "entry"}
-              emptyHint="Entry screenshot · PNG/JPEG/WebP · 4MB"
-              image={chartImage}
-              isDragging={draggingSlot === "entry"}
-              label="Entry"
-              onActivate={() => onSelectChartSlot("entry")}
-              onDragLeave={onDragLeave}
-              onDragOver={(e) => onDragOver("entry", e)}
-              onDrop={(e) => onDrop("entry", e)}
-              onPick={() => onPickChart("entry")}
-              onRemove={() => onClearChartSlot("entry")}
-            />
-            <ChartImageDropzone
-              active={pasteSlot === "exit"}
-              emptyHint="Exit screenshot · PNG/JPEG/WebP · 4MB"
-              image={exitImage}
-              isDragging={draggingSlot === "exit"}
-              label="Exit"
-              onActivate={() => onSelectChartSlot("exit")}
-              onDragLeave={onDragLeave}
-              onDragOver={(e) => onDragOver("exit", e)}
-              onDrop={(e) => onDrop("exit", e)}
-              onPick={() => onPickChart("exit")}
-              onRemove={() => onClearChartSlot("exit")}
-            />
-            <p className="text-muted-foreground text-xs">
-              Click a panel to choose where paste goes (marked Paste target).
-            </p>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (step === "hri") {
-    return (
-      <div>
-        <StepHeader
-          description="Checklist scores setup quality; anxiety is how the size felt."
-          title="Heart Rate Index"
-        />
-        <FieldSet className="gap-5">
-          <ConfluenceChecklistFields
-            checklist={confluenceChecklist}
-            onChange={setConfluenceChecklist}
-            ticker={ticker}
-          />
-
-          <Field>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <FieldLabel className="mb-0">Anxiety</FieldLabel>
-              <span
-                className={cn(
-                  "font-medium text-sm tabular-nums",
-                  anxietyLevel >= 7 ? "text-red-400" : "text-strong"
-                )}
-              >
-                {anxietyLevel}/10
-              </span>
-            </div>
-            <Slider
-              max={10}
-              min={1}
-              onValueChange={(value) => {
-                setAnxietyLevel(firstSliderValue(value));
-              }}
-              step={1}
-              value={[anxietyLevel]}
-            />
-            <FieldDescription className="mt-2">
-              Tight chest or glued to the screen → size is too big.
-            </FieldDescription>
-          </Field>
-        </FieldSet>
-      </div>
-    );
-  }
-
   return (
-    <div>
-      <StepHeader
-        description="Text or voice — at least one is required."
-        title="Notes"
-      />
-      <Tabs defaultValue="text">
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="text">Text</TabsTrigger>
-          <TabsTrigger value="voice">Voice</TabsTrigger>
-        </TabsList>
-
-        <TabsContent className="mt-3" value="text">
-          <Field>
-            <Textarea
-              autoFocus
-              className="min-h-28 resize-none"
-              id="notesText"
-              name="notesText"
-              onChange={(e) => setNotesText(e.target.value)}
-              placeholder="Plan, execution, what you'd change…"
-              rows={5}
-              value={notesText}
-            />
-          </Field>
-        </TabsContent>
-
-        <TabsContent className="mt-3" value="voice">
-          <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              {isRecording ? (
-                <Button
-                  onClick={onStopRecording}
-                  type="button"
-                  variant="destructive"
-                >
-                  <SquareIcon data-icon="inline-start" />
-                  Stop
-                </Button>
-              ) : (
-                <Button
-                  onClick={onStartRecording}
-                  type="button"
-                  variant="outline"
-                >
-                  <MicIcon data-icon="inline-start" />
-                  {voiceNote ? "Re-record" : "Record"}
-                </Button>
-              )}
-              {voiceNote && !isRecording ? (
-                <Button onClick={onClearVoice} type="button" variant="ghost">
-                  <Trash2Icon data-icon="inline-start" />
-                  Clear
-                </Button>
-              ) : null}
-              {isRecording ? (
-                <Badge className="animate-pulse" variant="destructive">
-                  Recording…
-                </Badge>
-              ) : null}
-              {voiceNote && !isRecording ? (
-                <Badge variant="secondary">Attached</Badge>
-              ) : null}
-            </div>
-            {voiceNote ? (
-              <audio className="w-full" controls src={voiceNote} />
-            ) : (
-              <p className="text-muted-foreground text-xs">
-                Short debrief after the trade works best.
-              </p>
-            )}
-          </div>
-        </TabsContent>
-      </Tabs>
+    <div
+      className={cn(
+        "flex flex-col items-start gap-0.5 rounded-xl border px-3 py-3 transition-colors",
+        selected
+          ? "border-primary bg-primary/10 ring-1 ring-primary/40"
+          : "border-border bg-transparent hover:bg-selected/60"
+      )}
+      data-selected={selected ? "true" : "false"}
+    >
+      <span
+        className={cn(
+          "font-medium tracking-tight",
+          selected ? "text-strong" : "text-strong",
+          titleClassName ?? "text-base"
+        )}
+      >
+        {label}
+      </span>
+      <span className="text-muted-foreground text-xs leading-snug">
+        {description}
+      </span>
     </div>
   );
 }
@@ -642,39 +338,83 @@ function clearTargetConfirmLabel(target: ClearTarget | null): string {
   return "Clear voice";
 }
 
-export function TradeForm({ onSaved }: { onSaved?: () => void }) {
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: multi-step form shell
+export function TradeForm({
+  initialTrade,
+  mode = "create",
+  onSaved,
+}: {
+  initialTrade?: Trade;
+  mode?: "create" | "edit";
+  onSaved?: () => void;
+}) {
   const router = useRouter();
+  const { preferredAccountId } = useAccountFilter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pickSlotRef = useRef<ChartSlot>("entry");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const initialSnapshot = useMemo(() => {
+    if (initialTrade) {
+      return tradeFormSnapshotFromTrade(initialTrade);
+    }
+    return {
+      ...DEFAULT_TRADE_FORM,
+      accountId: preferredAccountId,
+    };
+  }, [initialTrade, preferredAccountId]);
 
-  const [ticker, setTicker] = useState<Ticker>(DEFAULT_TRADE_FORM.ticker);
-  const [pnl, setPnl] = useState(DEFAULT_TRADE_FORM.pnl);
+  const [accountId, setAccountId] = useState<AccountId>(
+    initialSnapshot.accountId
+  );
+  const [ticker, setTicker] = useState<Ticker>(initialSnapshot.ticker);
+  const [direction, setDirection] = useState<Direction>(
+    initialSnapshot.direction
+  );
+  const [pnl, setPnl] = useState(initialSnapshot.pnl);
   const [positionSize, setPositionSize] = useState(
-    DEFAULT_TRADE_FORM.positionSize
+    initialSnapshot.positionSize
+  );
+  const [managementStyle, setManagementStyle] = useState<ManagementStyle>(
+    initialSnapshot.managementStyle
+  );
+  const [exitOutcome, setExitOutcome] = useState<ExitOutcome>(
+    initialSnapshot.exitOutcome
+  );
+  const [afterTp1Stop, setAfterTp1Stop] = useState<AfterTp1Stop | null>(
+    initialSnapshot.afterTp1Stop
+  );
+  const [tp1Contracts, setTp1Contracts] = useState(
+    initialSnapshot.tp1Contracts
+  );
+  const [plannedR, setPlannedR] = useState(initialSnapshot.plannedR);
+  const [realizedR, setRealizedR] = useState(initialSnapshot.realizedR);
+  const [mistakeTags, setMistakeTags] = useState<MistakeTag[]>(
+    initialSnapshot.mistakeTags
   );
   const [confluenceChecklist, setConfluenceChecklist] =
-    useState<ConfluenceChecklist>(DEFAULT_TRADE_FORM.confluenceChecklist);
+    useState<ConfluenceChecklist>(initialSnapshot.confluenceChecklist);
   const [anxietyLevel, setAnxietyLevel] = useState(
-    DEFAULT_TRADE_FORM.anxietyLevel
+    initialSnapshot.anxietyLevel
   );
   const [chartMode, setChartMode] = useState<ChartImageMode>(
-    DEFAULT_TRADE_FORM.chartMode
+    initialSnapshot.chartMode
   );
   const [chartImage, setChartImage] = useState<string | null>(
-    DEFAULT_TRADE_FORM.chartImage
+    initialSnapshot.chartImage
   );
   const [exitImage, setExitImage] = useState<string | null>(
-    DEFAULT_TRADE_FORM.exitImage
+    initialSnapshot.exitImage
   );
   const [pasteSlot, setPasteSlot] = useState<ChartSlot>("entry");
   const [draggingSlot, setDraggingSlot] = useState<ChartSlot | null>(null);
-  const [notesText, setNotesText] = useState(DEFAULT_TRADE_FORM.notesText);
+  const [notesText, setNotesText] = useState(initialSnapshot.notesText);
   const [voiceNote, setVoiceNote] = useState<string | null>(
-    DEFAULT_TRADE_FORM.voiceNote
+    mode === "edit" ? (initialTrade?.voiceNote ?? null) : null
   );
-  const [voiceNoteMime, setVoiceNoteMime] = useState<string | null>(null);
+  const [voiceNoteMime, setVoiceNoteMime] = useState<string | null>(
+    mode === "edit" ? (initialTrade?.voiceNoteMime ?? null) : null
+  );
   const [isRecording, setIsRecording] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -684,42 +424,61 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
 
   const snapshot: TradeFormSnapshot = useMemo(
     () => ({
+      accountId,
+      afterTp1Stop,
       anxietyLevel,
       chartImage,
       chartMode,
       confluenceChecklist,
+      direction,
       exitImage,
+      exitOutcome,
+      managementStyle,
+      mistakeTags,
       notesText,
+      plannedR,
       pnl,
       positionSize,
+      realizedR,
       ticker,
+      tp1Contracts,
       voiceNote,
     }),
     [
-      ticker,
+      accountId,
+      afterTp1Stop,
+      anxietyLevel,
+      chartImage,
+      chartMode,
+      confluenceChecklist,
+      direction,
+      exitImage,
+      exitOutcome,
+      managementStyle,
+      mistakeTags,
+      notesText,
+      plannedR,
       pnl,
       positionSize,
-      confluenceChecklist,
-      anxietyLevel,
-      chartMode,
-      chartImage,
-      exitImage,
-      notesText,
+      realizedR,
+      ticker,
+      tp1Contracts,
       voiceNote,
     ]
   );
 
-  const dirty = isTradeFormDirty(snapshot);
+  const dirtyBaseline = mode === "edit" ? initialSnapshot : DEFAULT_TRADE_FORM;
+  const dirty = isTradeFormDirty(snapshot, dirtyBaseline);
   const chartReady = isChartStepComplete(snapshot);
+  const resultReady = isResultStepComplete(snapshot);
+  const managementReady = isManagementStepComplete(snapshot);
 
   const checklist = useMemo(() => {
-    const hasPnl = pnl.trim().length > 0;
-    const hasSize = positionSize.trim().length > 0;
     const hasNotes = notesText.trim().length > 0 || Boolean(voiceNote);
     return [
-      { done: true, id: "ticker", label: "Ticker" },
-      { done: hasPnl, id: "pnl", label: "P&L" },
-      { done: hasSize, id: "size", label: "Size" },
+      { done: true, id: "account", label: "Account" },
+      { done: resultReady, id: "result", label: "Result" },
+      { done: managementReady, id: "management", label: "Exit" },
       {
         done: chartReady,
         id: "chart",
@@ -727,7 +486,14 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
       },
       { done: hasNotes, id: "notes", label: "Notes" },
     ];
-  }, [pnl, positionSize, chartReady, chartMode, notesText, voiceNote]);
+  }, [
+    resultReady,
+    managementReady,
+    chartReady,
+    chartMode,
+    notesText,
+    voiceNote,
+  ]);
 
   const readyCount = checklist.filter((c) => c.done).length;
   const missingItems = checklist.filter((item) => !item.done);
@@ -738,12 +504,12 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
   const isLastStep = currentStepIndex === tradeSteps.length - 1;
   const confluenceReady =
     validateConfluenceChecklist(confluenceChecklist) === null;
+  const saveLabel = mode === "edit" ? "Save changes" : "Save trade";
   const currentStepReady =
-    currentStepId === "ticker" ||
+    currentStepId === "contract" ||
+    (currentStepId === "result" && resultReady) ||
+    (currentStepId === "management" && managementReady) ||
     (currentStepId === "hri" && confluenceReady) ||
-    (currentStepId === "result" &&
-      pnl.trim().length > 0 &&
-      positionSize.trim().length > 0) ||
     (currentStepId === "chart" && chartReady) ||
     (currentStepId === "notes" &&
       (notesText.trim().length > 0 || Boolean(voiceNote)));
@@ -782,7 +548,6 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
       if (!items) {
         return;
       }
-
       for (const item of items) {
         if (!item.type.startsWith("image/")) {
           continue;
@@ -795,12 +560,11 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
         const slot =
           chartMode === "entry_exit" && pasteSlot === "exit" ? "exit" : "entry";
         setImageForSlot(slot, file).catch(() => {
-          // Errors are handled inside setImageForSlot.
+          // handled inside
         });
         return;
       }
     }
-
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   }, [chartMode, pasteSlot, setImageForSlot]);
@@ -809,12 +573,10 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
     if (!dirty) {
       return;
     }
-
     function onBeforeUnload(event: BeforeUnloadEvent) {
       event.preventDefault();
       event.returnValue = "";
     }
-
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
@@ -827,13 +589,11 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
         : "audio/mp4";
       const recorder = new MediaRecorder(stream);
       chunksRef.current = [];
-
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           chunksRef.current.push(event.data);
         }
       };
-
       recorder.onstop = () => {
         for (const track of stream.getTracks()) {
           track.stop();
@@ -851,7 +611,6 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
             toast.error("Failed to encode recording.");
           });
       };
-
       mediaRecorderRef.current = recorder;
       recorder.start();
       setIsRecording(true);
@@ -884,10 +643,10 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
     }
   }
 
-  function onSelectChartMode(mode: ChartImageMode) {
-    setChartMode(mode);
+  function onSelectChartMode(next: ChartImageMode) {
+    setChartMode(next);
     setError(null);
-    if (mode === "single") {
+    if (next === "single") {
       setExitImage(null);
       setPasteSlot("entry");
     } else {
@@ -896,9 +655,18 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
   }
 
   function resetForm() {
+    setAccountId(preferredAccountId);
     setTicker(DEFAULT_TRADE_FORM.ticker);
+    setDirection(DEFAULT_TRADE_FORM.direction);
     setPnl(DEFAULT_TRADE_FORM.pnl);
     setPositionSize(DEFAULT_TRADE_FORM.positionSize);
+    setManagementStyle(DEFAULT_TRADE_FORM.managementStyle);
+    setExitOutcome(DEFAULT_TRADE_FORM.exitOutcome);
+    setAfterTp1Stop(DEFAULT_TRADE_FORM.afterTp1Stop);
+    setTp1Contracts(DEFAULT_TRADE_FORM.tp1Contracts);
+    setPlannedR(DEFAULT_TRADE_FORM.plannedR);
+    setRealizedR(DEFAULT_TRADE_FORM.realizedR);
+    setMistakeTags([]);
     setConfluenceChecklist(DEFAULT_TRADE_FORM.confluenceChecklist);
     setAnxietyLevel(DEFAULT_TRADE_FORM.anxietyLevel);
     setChartMode(DEFAULT_TRADE_FORM.chartMode);
@@ -938,7 +706,33 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
   }
 
   function onConfirmReset() {
-    resetForm();
+    if (mode === "edit" && initialTrade) {
+      const snap = tradeFormSnapshotFromTrade(initialTrade);
+      setAccountId(snap.accountId);
+      setTicker(snap.ticker);
+      setDirection(snap.direction);
+      setPnl(snap.pnl);
+      setPositionSize(snap.positionSize);
+      setManagementStyle(snap.managementStyle);
+      setExitOutcome(snap.exitOutcome);
+      setAfterTp1Stop(snap.afterTp1Stop);
+      setTp1Contracts(snap.tp1Contracts);
+      setPlannedR(snap.plannedR);
+      setRealizedR(snap.realizedR);
+      setMistakeTags(snap.mistakeTags);
+      setConfluenceChecklist(snap.confluenceChecklist);
+      setAnxietyLevel(snap.anxietyLevel);
+      setChartMode(snap.chartMode);
+      setChartImage(snap.chartImage);
+      setExitImage(snap.exitImage);
+      setNotesText(snap.notesText);
+      setVoiceNote(initialTrade.voiceNote);
+      setVoiceNoteMime(initialTrade.voiceNoteMime);
+      setCurrentStepIndex(0);
+      setError(null);
+    } else {
+      resetForm();
+    }
     setResetConfirmOpen(false);
     toast.message("Form cleared");
   }
@@ -956,7 +750,9 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
       }
       let missingLabel = currentStep.label.toLowerCase();
       if (currentStepId === "result") {
-        missingLabel = "P&L and position size";
+        missingLabel = "direction, P&L, and position size";
+      } else if (currentStepId === "management") {
+        missingLabel = "exit outcome";
       } else if (currentStepId === "chart" && chartMode === "entry_exit") {
         missingLabel = "entry and exit charts";
       }
@@ -973,10 +769,57 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
     setCurrentStepIndex((stepIndex) => Math.max(stepIndex - 1, 0));
   }
 
-  function onSelectTicker(value: Ticker) {
-    setTicker(value);
-    setError(null);
-    setCurrentStepIndex(1);
+  function toggleMistakeTag(tag: MistakeTag) {
+    setMistakeTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+    );
+  }
+
+  function buildFormData(): FormData {
+    const formData = new FormData();
+    formData.set("accountId", accountId);
+    formData.set("ticker", ticker);
+    formData.set("direction", direction);
+    formData.set("pnl", pnl);
+    formData.set("positionSize", positionSize);
+    formData.set("managementStyle", managementStyle);
+    formData.set("exitOutcome", exitOutcome);
+    if (managementStyle === "partials") {
+      if (afterTp1Stop) {
+        formData.set("afterTp1Stop", afterTp1Stop);
+      }
+      if (tp1Contracts.trim()) {
+        formData.set("tp1Contracts", tp1Contracts);
+      }
+    }
+    if (plannedR.trim()) {
+      formData.set("plannedR", plannedR);
+    }
+    if (realizedR.trim()) {
+      formData.set("realizedR", realizedR);
+    }
+    formData.set(
+      "mistakeTags",
+      JSON.stringify(mistakeTags.filter(isMistakeTag))
+    );
+    formData.set(
+      "confluenceChecklist",
+      serializeConfluenceChecklist(confluenceChecklist)
+    );
+    formData.set("anxietyLevel", String(anxietyLevel));
+    formData.set("chartMode", chartMode);
+    formData.set("chartImage", chartImage ?? "");
+    if (chartMode === "entry_exit" && exitImage) {
+      formData.set("exitImage", exitImage);
+    }
+    formData.set("notesText", notesText);
+    if (voiceNote) {
+      formData.set("voiceNote", voiceNote);
+    }
+    if (voiceNoteMime) {
+      formData.set("voiceNoteMime", voiceNoteMime);
+    }
+    return formData;
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -995,39 +838,27 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
       setError("Add a text note or record a voice note.");
       return;
     }
-
-    const formData = new FormData();
-    formData.set("ticker", ticker);
-    formData.set("pnl", pnl);
-    formData.set("positionSize", positionSize);
-    formData.set(
-      "confluenceChecklist",
-      serializeConfluenceChecklist(confluenceChecklist)
-    );
-    formData.set("anxietyLevel", String(anxietyLevel));
-    formData.set("chartMode", chartMode);
-    formData.set("chartImage", chartImage ?? "");
-    if (chartMode === "entry_exit" && exitImage) {
-      formData.set("exitImage", exitImage);
-    }
-    formData.set("notesText", notesText);
-    if (voiceNote) {
-      formData.set("voiceNote", voiceNote);
-    }
-    if (voiceNoteMime) {
-      formData.set("voiceNoteMime", voiceNoteMime);
+    if (!managementReady) {
+      setError("Select an exit outcome.");
+      return;
     }
 
+    const formData = buildFormData();
     setPending(true);
     try {
-      const result = await createTradeAction(formData);
+      const result =
+        mode === "edit" && initialTrade
+          ? await updateTradeAction(initialTrade.id, formData)
+          : await createTradeAction(formData);
       if (!result.success) {
         setError(result.error);
         toast.error(result.error);
         return;
       }
-      toast.success("Trade logged");
-      resetForm();
+      toast.success(mode === "edit" ? "Trade updated" : "Trade logged");
+      if (mode === "create") {
+        resetForm();
+      }
       onSaved?.();
       router.push(`/trades/${result.id}`);
       router.refresh();
@@ -1036,30 +867,608 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
     }
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: step switch
+  function renderStep() {
+    if (currentStepId === "contract") {
+      return (
+        <div className="space-y-6">
+          <div>
+            <StepHeader
+              description="Which Lucid eval did you trade?"
+              title="Account"
+            />
+            <RadioGroup
+              className="grid gap-3"
+              onValueChange={(value) => {
+                if (value === "lucid_a" || value === "lucid_b") {
+                  setAccountId(value);
+                }
+              }}
+              value={accountId}
+            >
+              {TRADING_ACCOUNTS.map((account) => {
+                const selected = accountId === account.id;
+                return (
+                  <FieldLabel className="cursor-pointer" key={account.id}>
+                    <RadioGroupItem className="sr-only" value={account.id} />
+                    <OptionCard
+                      description={`${account.phase} · start $${account.startingBalance.toLocaleString()}`}
+                      label={account.shortLabel}
+                      selected={selected}
+                      titleClassName="text-lg"
+                    />
+                  </FieldLabel>
+                );
+              })}
+            </RadioGroup>
+          </div>
+          <div>
+            <StepHeader description="Which micro contract?" title="Contract" />
+            <RadioGroup
+              className="grid grid-cols-2 gap-3"
+              onValueChange={(value) => {
+                if (value === "MNQ" || value === "MES") {
+                  setTicker(value);
+                }
+              }}
+              value={ticker}
+            >
+              {tickerOptions.map((option) => {
+                const selected = ticker === option.value;
+                return (
+                  <FieldLabel className="cursor-pointer" key={option.value}>
+                    <RadioGroupItem className="sr-only" value={option.value} />
+                    <OptionCard
+                      description={option.description}
+                      label={option.value}
+                      selected={selected}
+                      titleClassName="font-mono text-2xl"
+                    />
+                  </FieldLabel>
+                );
+              })}
+            </RadioGroup>
+          </div>
+        </div>
+      );
+    }
+
+    if (currentStepId === "result") {
+      return (
+        <div>
+          <StepHeader
+            description="Direction, net dollars, and contracts."
+            title="Result"
+          />
+          <div className="grid gap-4">
+            <Field>
+              <FieldLabel>Direction</FieldLabel>
+              <RadioGroup
+                className="grid grid-cols-2 gap-3"
+                onValueChange={(value) => {
+                  if (value === "long" || value === "short") {
+                    setDirection(value);
+                  }
+                }}
+                value={direction}
+              >
+                {directionOptions.map((option) => {
+                  const selected = direction === option.value;
+                  return (
+                    <FieldLabel className="cursor-pointer" key={option.value}>
+                      <RadioGroupItem
+                        className="sr-only"
+                        value={option.value}
+                      />
+                      <OptionCard
+                        description={option.description}
+                        label={option.label}
+                        selected={selected}
+                      />
+                    </FieldLabel>
+                  );
+                })}
+              </RadioGroup>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="pnl">P&L ($)</FieldLabel>
+              <Input
+                autoFocus
+                className="h-11 font-mono text-base tabular-nums"
+                id="pnl"
+                inputMode="decimal"
+                name="pnl"
+                onChange={(e) => setPnl(e.target.value)}
+                placeholder="125.50 or -80"
+                required
+                step="0.01"
+                type="number"
+                value={pnl}
+              />
+              <FieldDescription>
+                Net realized dollars for the whole trade (one number).
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="positionSize">Position size</FieldLabel>
+              <Input
+                className="h-11 tabular-nums"
+                id="positionSize"
+                inputMode="numeric"
+                min="1"
+                name="positionSize"
+                onChange={(e) => setPositionSize(e.target.value)}
+                placeholder="Contracts"
+                required
+                step="1"
+                type="number"
+                value={positionSize}
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field>
+                <FieldLabel htmlFor="plannedR">Planned R (opt.)</FieldLabel>
+                <Input
+                  className="h-11 tabular-nums"
+                  id="plannedR"
+                  inputMode="decimal"
+                  onChange={(e) => setPlannedR(e.target.value)}
+                  placeholder="2"
+                  step="0.1"
+                  type="number"
+                  value={plannedR}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="realizedR">Realized R (opt.)</FieldLabel>
+                <Input
+                  className="h-11 tabular-nums"
+                  id="realizedR"
+                  inputMode="decimal"
+                  onChange={(e) => setRealizedR(e.target.value)}
+                  placeholder="1.5"
+                  step="0.1"
+                  type="number"
+                  value={realizedR}
+                />
+              </Field>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (currentStepId === "management") {
+      return (
+        <div>
+          <StepHeader
+            description="How did the exit play out? Partials expand only when needed."
+            title="Exit management"
+          />
+          <div className="grid gap-5">
+            <Field>
+              <FieldLabel>Style</FieldLabel>
+              <RadioGroup
+                className="grid grid-cols-2 gap-3"
+                onValueChange={(value) => {
+                  if (value === "full" || value === "partials") {
+                    setManagementStyle(value);
+                    if (value === "full") {
+                      setAfterTp1Stop(null);
+                      setTp1Contracts("");
+                    }
+                  }
+                }}
+                value={managementStyle}
+              >
+                {(
+                  [
+                    {
+                      description: "Single exit / all-in management",
+                      label: "Full",
+                      value: "full" as const,
+                    },
+                    {
+                      description: "Scaled out at TP1 / runner",
+                      label: "Partials",
+                      value: "partials" as const,
+                    },
+                  ] as const
+                ).map((option) => {
+                  const selected = managementStyle === option.value;
+                  return (
+                    <FieldLabel className="cursor-pointer" key={option.value}>
+                      <RadioGroupItem
+                        className="sr-only"
+                        value={option.value}
+                      />
+                      <OptionCard
+                        description={option.description}
+                        label={option.label}
+                        selected={selected}
+                      />
+                    </FieldLabel>
+                  );
+                })}
+              </RadioGroup>
+            </Field>
+
+            <Field>
+              <FieldLabel>Outcome</FieldLabel>
+              <div className="flex flex-wrap gap-2">
+                {EXIT_OUTCOME_OPTIONS.map((option) => {
+                  const selected = exitOutcome === option.id;
+                  return (
+                    <button
+                      className={cn(
+                        "rounded-full border px-3 py-1.5 text-left text-xs transition-colors",
+                        selected
+                          ? "border-strong bg-selected font-medium text-strong"
+                          : "border-border text-muted-foreground hover:bg-selected/60"
+                      )}
+                      key={option.id}
+                      onClick={() => setExitOutcome(option.id)}
+                      title={option.description}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+
+            {managementStyle === "partials" ? (
+              <div className="grid gap-4 rounded-xl border border-border/60 bg-card/40 p-4">
+                <Field>
+                  <FieldLabel htmlFor="tp1Contracts">
+                    TP1 size (contracts, optional)
+                  </FieldLabel>
+                  <Input
+                    className="h-10 tabular-nums"
+                    id="tp1Contracts"
+                    inputMode="decimal"
+                    min="0"
+                    onChange={(e) => setTp1Contracts(e.target.value)}
+                    placeholder="e.g. 2"
+                    step="1"
+                    type="number"
+                    value={tp1Contracts}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel>After TP1 stop</FieldLabel>
+                  <div className="flex flex-wrap gap-2">
+                    {AFTER_TP1_OPTIONS.map((option) => {
+                      const selected = afterTp1Stop === option.id;
+                      return (
+                        <button
+                          className={cn(
+                            "rounded-full border px-3 py-1.5 text-xs transition-colors",
+                            selected
+                              ? "border-strong bg-selected font-medium text-strong"
+                              : "border-border text-muted-foreground hover:bg-selected/60"
+                          )}
+                          key={option.id}
+                          onClick={() =>
+                            setAfterTp1Stop(selected ? null : option.id)
+                          }
+                          type="button"
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+              </div>
+            ) : null}
+
+            <Field>
+              <FieldLabel>Mistake tags (optional)</FieldLabel>
+              <div className="flex flex-wrap gap-2">
+                {MISTAKE_TAG_OPTIONS.map((option) => {
+                  const selected = mistakeTags.includes(option.id);
+                  return (
+                    <button
+                      className={cn(
+                        "rounded-full border px-3 py-1.5 text-xs transition-colors",
+                        selected
+                          ? "border-red-500/50 bg-red-500/10 font-medium text-red-300"
+                          : "border-border text-muted-foreground hover:bg-selected/60"
+                      )}
+                      key={option.id}
+                      onClick={() => toggleMistakeTag(option.id)}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+          </div>
+        </div>
+      );
+    }
+
+    if (currentStepId === "chart") {
+      return (
+        <div>
+          <StepHeader
+            description="Attach one chart, or separate entry and exit captures."
+            title="Chart"
+          />
+          <RadioGroup
+            className="mb-4 grid grid-cols-2 gap-2"
+            onValueChange={(value) => {
+              if (value === "single" || value === "entry_exit") {
+                onSelectChartMode(value);
+              }
+            }}
+            value={chartMode}
+          >
+            {chartModeOptions.map((option) => {
+              const selected = chartMode === option.value;
+              return (
+                <FieldLabel className="cursor-pointer" key={option.value}>
+                  <RadioGroupItem className="sr-only" value={option.value} />
+                  <OptionCard
+                    description={option.description}
+                    label={option.label}
+                    selected={selected}
+                  />
+                </FieldLabel>
+              );
+            })}
+          </RadioGroup>
+
+          {chartMode === "single" ? (
+            <ChartImageDropzone
+              image={chartImage}
+              isDragging={draggingSlot === "entry"}
+              label="Chart"
+              onDragLeave={() => setDraggingSlot(null)}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDraggingSlot("entry");
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDraggingSlot(null);
+                const [file] = e.dataTransfer.files;
+                if (file) {
+                  setImageForSlot("entry", file).catch(() => undefined);
+                }
+              }}
+              onPick={() => {
+                pickSlotRef.current = "entry";
+                fileInputRef.current?.click();
+              }}
+              onRemove={() => setClearTarget("entry")}
+            />
+          ) : (
+            <div className="grid gap-3">
+              <ChartImageDropzone
+                active={pasteSlot === "entry"}
+                emptyHint="Entry screenshot · PNG/JPEG/WebP · 4MB"
+                image={chartImage}
+                isDragging={draggingSlot === "entry"}
+                label="Entry"
+                onActivate={() => setPasteSlot("entry")}
+                onDragLeave={() => setDraggingSlot(null)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDraggingSlot("entry");
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDraggingSlot(null);
+                  setPasteSlot("entry");
+                  const [file] = e.dataTransfer.files;
+                  if (file) {
+                    setImageForSlot("entry", file).catch(() => undefined);
+                  }
+                }}
+                onPick={() => {
+                  pickSlotRef.current = "entry";
+                  setPasteSlot("entry");
+                  fileInputRef.current?.click();
+                }}
+                onRemove={() => setClearTarget("entry")}
+              />
+              <ChartImageDropzone
+                active={pasteSlot === "exit"}
+                emptyHint="Exit screenshot · PNG/JPEG/WebP · 4MB"
+                image={exitImage}
+                isDragging={draggingSlot === "exit"}
+                label="Exit"
+                onActivate={() => setPasteSlot("exit")}
+                onDragLeave={() => setDraggingSlot(null)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDraggingSlot("exit");
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDraggingSlot(null);
+                  setPasteSlot("exit");
+                  const [file] = e.dataTransfer.files;
+                  if (file) {
+                    setImageForSlot("exit", file).catch(() => undefined);
+                  }
+                }}
+                onPick={() => {
+                  pickSlotRef.current = "exit";
+                  setPasteSlot("exit");
+                  fileInputRef.current?.click();
+                }}
+                onRemove={() => setClearTarget("exit")}
+              />
+              <p className="text-muted-foreground text-xs">
+                Click a panel to choose where paste goes (marked Paste target).
+              </p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (currentStepId === "hri") {
+      return (
+        <div>
+          <StepHeader
+            description="Checklist scores setup quality; anxiety is how the size felt."
+            title="Heart Rate Index"
+          />
+          <FieldSet className="gap-5">
+            <ConfluenceChecklistFields
+              checklist={confluenceChecklist}
+              onChange={setConfluenceChecklist}
+              ticker={ticker}
+            />
+            <Field>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <FieldLabel className="mb-0">Anxiety</FieldLabel>
+                <span
+                  className={cn(
+                    "font-medium text-sm tabular-nums",
+                    anxietyLevel >= 7 ? "text-red-400" : "text-strong"
+                  )}
+                >
+                  {anxietyLevel}/10
+                </span>
+              </div>
+              <Slider
+                max={10}
+                min={1}
+                onValueChange={(value) => {
+                  setAnxietyLevel(firstSliderValue(value));
+                }}
+                step={1}
+                value={[anxietyLevel]}
+              />
+              <FieldDescription className="mt-2">
+                Tight chest or glued to the screen → size is too big.
+              </FieldDescription>
+            </Field>
+          </FieldSet>
+        </div>
+      );
+    }
+
+    return (
+      <div>
+        <StepHeader
+          description="Text or voice — at least one is required."
+          title="Notes"
+        />
+        <Tabs defaultValue="text">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="text">Text</TabsTrigger>
+            <TabsTrigger value="voice">Voice</TabsTrigger>
+          </TabsList>
+          <TabsContent className="mt-3" value="text">
+            <Field>
+              <Textarea
+                autoFocus
+                className="min-h-28 resize-none"
+                id="notesText"
+                name="notesText"
+                onChange={(e) => setNotesText(e.target.value)}
+                placeholder="Plan, execution, what you'd change…"
+                rows={5}
+                value={notesText}
+              />
+            </Field>
+          </TabsContent>
+          <TabsContent className="mt-3" value="voice">
+            <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                {isRecording ? (
+                  <Button
+                    onClick={stopRecording}
+                    type="button"
+                    variant="destructive"
+                  >
+                    <SquareIcon data-icon="inline-start" />
+                    Stop
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => {
+                      startRecording().catch(() => undefined);
+                    }}
+                    type="button"
+                    variant="outline"
+                  >
+                    <MicIcon data-icon="inline-start" />
+                    {voiceNote ? "Re-record" : "Record"}
+                  </Button>
+                )}
+                {voiceNote && !isRecording ? (
+                  <Button
+                    onClick={() => setClearTarget("voice")}
+                    type="button"
+                    variant="ghost"
+                  >
+                    <Trash2Icon data-icon="inline-start" />
+                    Clear
+                  </Button>
+                ) : null}
+                {isRecording ? (
+                  <Badge className="animate-pulse" variant="destructive">
+                    Recording…
+                  </Badge>
+                ) : null}
+                {voiceNote && !isRecording ? (
+                  <Badge variant="secondary">Attached</Badge>
+                ) : null}
+              </div>
+              {voiceNote ? (
+                <audio className="w-full" controls src={voiceNote}>
+                  <track kind="captions" />
+                </audio>
+              ) : (
+                <p className="text-muted-foreground text-xs">
+                  Short debrief after the trade works best.
+                </p>
+              )}
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="flex flex-col">
         <div className="flex items-center justify-between gap-3 border-border border-b px-4 py-3">
           <div className="min-w-0">
-            <p className="font-medium text-sm text-strong">Log trade</p>
+            <p className="font-medium text-sm text-strong">
+              {mode === "edit" ? "Edit trade" : "Log trade"}
+            </p>
             <p className="text-muted-foreground text-xs">
               Step {currentStepIndex + 1} of {tradeSteps.length} ·{" "}
               {currentStep.label}
             </p>
           </div>
-          <DialogClose
-            render={
-              <Button
-                aria-label="Close"
-                className="shrink-0"
-                size="icon-sm"
-                type="button"
-                variant="ghost"
-              />
-            }
-          >
-            <XIcon />
-          </DialogClose>
+          {mode === "create" ? (
+            <DialogClose
+              render={
+                <Button
+                  aria-label="Close"
+                  className="shrink-0"
+                  size="icon-sm"
+                  type="button"
+                  variant="ghost"
+                />
+              }
+            >
+              <XIcon />
+            </DialogClose>
+          ) : null}
         </div>
 
         <div className="border-border border-b px-4 py-3">
@@ -1068,7 +1477,6 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
               const isActive = index === currentStepIndex;
               const isComplete = index < currentStepIndex;
               const isLast = index === tradeSteps.length - 1;
-
               return (
                 <div
                   className={cn(
@@ -1120,70 +1528,17 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
             onChange={(e) => {
               const [file] = e.target.files ?? [];
               if (file) {
-                setImageForSlot(pickSlotRef.current, file).catch(() => {
-                  // Errors are handled inside setImageForSlot.
-                });
+                setImageForSlot(pickSlotRef.current, file).catch(
+                  () => undefined
+                );
               }
             }}
             ref={fileInputRef}
             type="file"
           />
 
-          <div className="max-h-[min(26rem,calc(100svh-14rem))] overflow-y-auto px-4 py-4">
-            <TradeFormStep
-              anxietyLevel={anxietyLevel}
-              chartImage={chartImage}
-              chartMode={chartMode}
-              confluenceChecklist={confluenceChecklist}
-              draggingSlot={draggingSlot}
-              exitImage={exitImage}
-              isRecording={isRecording}
-              notesText={notesText}
-              onClearChartSlot={(slot) => setClearTarget(slot)}
-              onClearVoice={() => setClearTarget("voice")}
-              onDragLeave={() => setDraggingSlot(null)}
-              onDragOver={(slot, e) => {
-                e.preventDefault();
-                setDraggingSlot(slot);
-              }}
-              onDrop={(slot, e) => {
-                e.preventDefault();
-                setDraggingSlot(null);
-                setPasteSlot(slot);
-                const [file] = e.dataTransfer.files;
-                if (file) {
-                  setImageForSlot(slot, file).catch(() => {
-                    // Errors are handled inside setImageForSlot.
-                  });
-                }
-              }}
-              onPickChart={(slot) => {
-                pickSlotRef.current = slot;
-                setPasteSlot(slot);
-                fileInputRef.current?.click();
-              }}
-              onSelectChartMode={onSelectChartMode}
-              onSelectChartSlot={setPasteSlot}
-              onSelectTicker={onSelectTicker}
-              onStartRecording={() => {
-                startRecording().catch(() => {
-                  // Errors are handled inside startRecording.
-                });
-              }}
-              onStopRecording={stopRecording}
-              pasteSlot={pasteSlot}
-              pnl={pnl}
-              positionSize={positionSize}
-              setAnxietyLevel={setAnxietyLevel}
-              setConfluenceChecklist={setConfluenceChecklist}
-              setNotesText={setNotesText}
-              setPnl={setPnl}
-              setPositionSize={setPositionSize}
-              step={currentStepId}
-              ticker={ticker}
-              voiceNote={voiceNote}
-            />
-
+          <div className="max-h-[min(28rem,calc(100svh-14rem))] overflow-y-auto px-4 py-4">
+            {renderStep()}
             {error ? (
               <Alert className="mt-4" variant="destructive">
                 <AlertTitle>Could not continue</AlertTitle>
@@ -1230,7 +1585,7 @@ export function TradeForm({ onSaved }: { onSaved?: () => void }) {
                       Saving…
                     </>
                   ) : (
-                    "Save trade"
+                    saveLabel
                   )}
                 </Button>
               ) : (

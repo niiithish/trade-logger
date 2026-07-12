@@ -6,10 +6,18 @@ import {
   isSameMonth,
   startOfMonth,
   startOfWeek,
+  subWeeks,
 } from "date-fns";
 
-import { dateToDayKey, toDayKey } from "@/lib/format";
-import type { DaySummary, Trade } from "@/lib/types";
+import type { AccountId } from "@/lib/accounts";
+import { dateToDayKey, dayKeyToDate, toDayKey } from "@/lib/format";
+import type {
+  AccountFilter,
+  DateRangePreset,
+  DaySummary,
+  Ticker,
+  Trade,
+} from "@/lib/types";
 
 export interface DayStats extends DaySummary {
   winRate: number;
@@ -21,6 +29,52 @@ export interface WeekStats {
   tradeCount: number;
   tradingDays: number;
   weekIndex: number;
+}
+
+export interface PeriodSnapshot {
+  avgAnxiety: number;
+  label: string;
+  totalPnl: number;
+  tradeCount: number;
+  winRate: number;
+}
+
+export interface PeriodPulse {
+  deltas: {
+    avgAnxiety: number | null;
+    totalPnl: number | null;
+    tradeCount: number | null;
+    winRate: number | null;
+  };
+  lastWeek: PeriodSnapshot;
+  thisWeek: PeriodSnapshot;
+}
+
+export interface TodayStrip {
+  dayKey: string;
+  totalPnl: number;
+  tradeCount: number;
+  winRate: number;
+}
+
+export interface BreakdownRow {
+  avgPnl: number;
+  id: string;
+  label: string;
+  totalPnl: number;
+  tradeCount: number;
+  winRate: number;
+}
+
+export interface TradeInsight {
+  kind: "strength" | "weakness";
+  text: string;
+}
+
+export interface DrawdownPoint {
+  cumulative: number;
+  date: string;
+  drawdown: number;
 }
 
 export interface DashboardMetrics {
@@ -50,6 +104,9 @@ export interface DashboardMetrics {
   winRate: number;
   winRateChangePct: number | null;
 }
+
+/** Calendar weeks start on Sunday to match `buildMonthGrid`. */
+export const WEEK_STARTS_ON = 0 as const;
 
 interface ChangeMetrics {
   avgWinLossChangePct: number | null;
@@ -97,8 +154,8 @@ export function computeDayStats(trades: Trade[]): Map<string, DayStats> {
 export function buildMonthGrid(month: Date, dayStats: Map<string, DayStats>) {
   const monthStart = startOfMonth(month);
   const monthEnd = endOfMonth(month);
-  const gridStart = startOfWeek(monthStart, { weekStartsOn: 0 });
-  const gridEnd = endOfWeek(monthEnd, { weekStartsOn: 0 });
+  const gridStart = startOfWeek(monthStart, { weekStartsOn: WEEK_STARTS_ON });
+  const gridEnd = endOfWeek(monthEnd, { weekStartsOn: WEEK_STARTS_ON });
 
   const days = eachDayOfInterval({ end: gridEnd, start: gridStart }).map(
     (date) => {
@@ -210,7 +267,6 @@ function maxDrawdownPct(equity: number[]): number {
       maxDd = dd;
     }
   }
-  // score against peak magnitude; if flat, 0 drawdown
   if (peak <= 0) {
     return maxDd > 0 ? 100 : 0;
   }
@@ -281,7 +337,6 @@ export function computeDashboardMetrics(trades: Trade[]): DashboardMetrics {
     ? sorted.reduce((s, t) => s + t.confluenceScore, 0) / sorted.length
     : 0;
 
-  // Equity curve by day
   const dayMap = computeDayStats(sorted);
   const dayKeys = [...dayMap.keys()].sort();
   let cumulative = 0;
@@ -305,16 +360,13 @@ export function computeDashboardMetrics(trades: Trade[]): DashboardMetrics {
   const equityValues = equityCurve.map((p) => p.cumulative);
   const ddPct = maxDrawdownPct(equityValues);
 
-  // Compass component scores 0-100 (higher better)
   const winRateScore = clamp(winRate);
-  const maxDrawdownScore = clamp(100 - ddPct); // lower DD is better
-  // consistency: inverse of anxiety + win rate stability proxy
+  const maxDrawdownScore = clamp(100 - ddPct);
   const consistency = clamp(
     100 - avgAnxiety * 6 + Math.min(20, avgConfluence * 4)
   );
   const pfScore = clamp((Math.min(profitFactor, 3) / 3) * 100);
   const awlScore = clamp((Math.min(avgWinLossRatio, 3) / 3) * 100);
-  // recovery: how well equity recovered from max DD
   const peak = Math.max(0, ...equityValues, 0);
   const end = equityValues.at(-1) ?? 0;
   let recovery = 50;
@@ -358,5 +410,446 @@ export function computeDashboardMetrics(trades: Trade[]): DashboardMetrics {
     winners: winners.length,
     winRate,
     winRateChangePct,
+  };
+}
+
+/** Filter trades by account (all = no filter). */
+export function filterTradesByAccount(
+  trades: Trade[],
+  account: AccountFilter
+): Trade[] {
+  if (account === "all") {
+    return trades;
+  }
+  return trades.filter((t) => t.accountId === account);
+}
+
+export function getWeekBounds(
+  reference: Date,
+  weekStartsOn: 0 | 1 = WEEK_STARTS_ON
+): { end: Date; start: Date } {
+  return {
+    end: endOfWeek(reference, { weekStartsOn }),
+    start: startOfWeek(reference, { weekStartsOn }),
+  };
+}
+
+export function getDateRangeBounds(
+  preset: DateRangePreset,
+  now: Date = new Date()
+): { end: Date | null; start: Date | null } {
+  if (preset === "all") {
+    return { end: null, start: null };
+  }
+
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayEnd = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    23,
+    59,
+    59,
+    999
+  );
+
+  if (preset === "today") {
+    return { end: todayEnd, start: todayStart };
+  }
+
+  if (preset === "mtd") {
+    return { end: todayEnd, start: startOfMonth(now) };
+  }
+
+  if (preset === "this_week") {
+    const { end, start } = getWeekBounds(now);
+    return { end: end > todayEnd ? todayEnd : end, start };
+  }
+
+  // last_week
+  const lastWeekRef = subWeeks(now, 1);
+  return getWeekBounds(lastWeekRef);
+}
+
+export function filterTradesByDateRange(
+  trades: Trade[],
+  preset: DateRangePreset,
+  now: Date = new Date()
+): Trade[] {
+  const { end, start } = getDateRangeBounds(preset, now);
+  if (!(start && end)) {
+    return trades;
+  }
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  return trades.filter((t) => {
+    const ms = new Date(t.createdAt).getTime();
+    return ms >= startMs && ms <= endMs;
+  });
+}
+
+export function filterTrades(
+  trades: Trade[],
+  options: {
+    account?: AccountFilter;
+    dateRange?: DateRangePreset;
+    direction?: "all" | "long" | "short";
+    exitOutcome?: string | "all";
+    now?: Date;
+    ticker?: "all" | Ticker;
+  }
+): Trade[] {
+  let result = trades;
+  if (options.account) {
+    result = filterTradesByAccount(result, options.account);
+  }
+  if (options.dateRange) {
+    result = filterTradesByDateRange(result, options.dateRange, options.now);
+  }
+  if (options.ticker && options.ticker !== "all") {
+    result = result.filter((t) => t.ticker === options.ticker);
+  }
+  if (options.direction && options.direction !== "all") {
+    result = result.filter((t) => t.direction === options.direction);
+  }
+  if (options.exitOutcome && options.exitOutcome !== "all") {
+    result = result.filter((t) => t.exitOutcome === options.exitOutcome);
+  }
+  return result;
+}
+
+function periodSnapshot(trades: Trade[], label: string): PeriodSnapshot {
+  const tradeCount = trades.length;
+  const winners = trades.filter((t) => t.pnl > 0).length;
+  const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+  const avgAnxiety = tradeCount
+    ? trades.reduce((s, t) => s + t.anxietyLevel, 0) / tradeCount
+    : 0;
+  return {
+    avgAnxiety,
+    label,
+    totalPnl,
+    tradeCount,
+    winRate: tradeCount ? (winners / tradeCount) * 100 : 0,
+  };
+}
+
+function deltaOrNull(current: number, previous: number, bothEmpty: boolean) {
+  if (bothEmpty) {
+    return null;
+  }
+  return current - previous;
+}
+
+/** This calendar week vs previous calendar week (Sun–Sat). */
+export function computePeriodPulse(
+  trades: Trade[],
+  now: Date = new Date()
+): PeriodPulse {
+  const thisWeekTrades = filterTradesByDateRange(trades, "this_week", now);
+  const lastWeekTrades = filterTradesByDateRange(trades, "last_week", now);
+  const thisWeek = periodSnapshot(thisWeekTrades, "This week");
+  const lastWeek = periodSnapshot(lastWeekTrades, "Last week");
+  const bothEmpty = thisWeek.tradeCount === 0 && lastWeek.tradeCount === 0;
+
+  return {
+    deltas: {
+      avgAnxiety: deltaOrNull(
+        thisWeek.avgAnxiety,
+        lastWeek.avgAnxiety,
+        bothEmpty
+      ),
+      totalPnl: deltaOrNull(thisWeek.totalPnl, lastWeek.totalPnl, bothEmpty),
+      tradeCount: deltaOrNull(
+        thisWeek.tradeCount,
+        lastWeek.tradeCount,
+        bothEmpty
+      ),
+      winRate: deltaOrNull(thisWeek.winRate, lastWeek.winRate, bothEmpty),
+    },
+    lastWeek,
+    thisWeek,
+  };
+}
+
+export function computeTodayStrip(
+  trades: Trade[],
+  now: Date = new Date()
+): TodayStrip {
+  const dayKey = dateToDayKey(now);
+  const todayTrades = trades.filter((t) => toDayKey(t.createdAt) === dayKey);
+  const tradeCount = todayTrades.length;
+  const winners = todayTrades.filter((t) => t.pnl > 0).length;
+  return {
+    dayKey,
+    totalPnl: todayTrades.reduce((s, t) => s + t.pnl, 0),
+    tradeCount,
+    winRate: tradeCount ? (winners / tradeCount) * 100 : 0,
+  };
+}
+
+function breakdownFromGroups(
+  groups: Map<string, Trade[]>,
+  labelFor: (id: string) => string
+): BreakdownRow[] {
+  const rows: BreakdownRow[] = [];
+  for (const [id, group] of groups) {
+    const tradeCount = group.length;
+    const winners = group.filter((t) => t.pnl > 0).length;
+    const totalPnl = group.reduce((s, t) => s + t.pnl, 0);
+    rows.push({
+      avgPnl: tradeCount ? totalPnl / tradeCount : 0,
+      id,
+      label: labelFor(id),
+      totalPnl,
+      tradeCount,
+      winRate: tradeCount ? (winners / tradeCount) * 100 : 0,
+    });
+  }
+  return rows.sort((a, b) => b.totalPnl - a.totalPnl);
+}
+
+export function breakdownByTicker(trades: Trade[]): BreakdownRow[] {
+  const map = new Map<string, Trade[]>();
+  for (const t of trades) {
+    const list = map.get(t.ticker) ?? [];
+    list.push(t);
+    map.set(t.ticker, list);
+  }
+  // Ensure both instruments appear when empty filter still wants labels
+  if (!map.has("MNQ")) {
+    map.set("MNQ", []);
+  }
+  if (!map.has("MES")) {
+    map.set("MES", []);
+  }
+  return breakdownFromGroups(map, (id) => id);
+}
+
+export function breakdownByDirection(trades: Trade[]): BreakdownRow[] {
+  const map = new Map<string, Trade[]>();
+  for (const t of trades) {
+    const key = t.direction ?? "unknown";
+    const list = map.get(key) ?? [];
+    list.push(t);
+    map.set(key, list);
+  }
+  return breakdownFromGroups(map, (id) => {
+    if (id === "long") {
+      return "Long";
+    }
+    if (id === "short") {
+      return "Short";
+    }
+    return "Unknown";
+  });
+}
+
+const WEEKDAY_LABELS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
+
+export function breakdownByWeekday(trades: Trade[]): BreakdownRow[] {
+  const map = new Map<string, Trade[]>();
+  for (const t of trades) {
+    const day = dayKeyToDate(toDayKey(t.createdAt)).getDay();
+    const key = String(day);
+    const list = map.get(key) ?? [];
+    list.push(t);
+    map.set(key, list);
+  }
+  return breakdownFromGroups(
+    map,
+    (id) => WEEKDAY_LABELS[Number(id)] ?? id
+  ).sort((a, b) => Number(a.id) - Number(b.id));
+}
+
+export function breakdownByConfluenceBand(trades: Trade[]): BreakdownRow[] {
+  const map = new Map<string, Trade[]>([
+    ["0-2", []],
+    ["3-4", []],
+    ["5-6", []],
+  ]);
+  for (const t of trades) {
+    let band = "0-2";
+    if (t.confluenceScore >= 5) {
+      band = "5-6";
+    } else if (t.confluenceScore >= 3) {
+      band = "3-4";
+    }
+    map.get(band)?.push(t);
+  }
+  return breakdownFromGroups(map, (id) => `Confluence ${id}`);
+}
+
+export function breakdownByAnxietyBand(trades: Trade[]): BreakdownRow[] {
+  const map = new Map<string, Trade[]>([
+    ["calm", []],
+    ["elevated", []],
+    ["high", []],
+  ]);
+  for (const t of trades) {
+    let band = "calm";
+    if (t.anxietyLevel >= 7) {
+      band = "high";
+    } else if (t.anxietyLevel >= 4) {
+      band = "elevated";
+    }
+    map.get(band)?.push(t);
+  }
+  return breakdownFromGroups(map, (id) => {
+    if (id === "calm") {
+      return "Calm (1–3)";
+    }
+    if (id === "elevated") {
+      return "Elevated (4–6)";
+    }
+    return "High (7–10)";
+  });
+}
+
+export function breakdownByExitOutcome(trades: Trade[]): BreakdownRow[] {
+  const map = new Map<string, Trade[]>();
+  for (const t of trades) {
+    const key = t.exitOutcome ?? "unknown";
+    const list = map.get(key) ?? [];
+    list.push(t);
+    map.set(key, list);
+  }
+  return breakdownFromGroups(map, (id) => id);
+}
+
+export function computeDrawdownSeries(trades: Trade[]): DrawdownPoint[] {
+  const metrics = computeDashboardMetrics(trades);
+  let peak = 0;
+  return metrics.equityCurve.map((p) => {
+    if (p.cumulative > peak) {
+      peak = p.cumulative;
+    }
+    return {
+      cumulative: p.cumulative,
+      date: p.date,
+      drawdown: peak - p.cumulative,
+    };
+  });
+}
+
+/** Minimum trades before rule-based insights are shown. */
+export const INSIGHT_MIN_TRADES = 8;
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: multi-rule insight builder
+export function insightsFromTrades(
+  trades: Trade[],
+  minN: number = INSIGHT_MIN_TRADES
+): TradeInsight[] {
+  if (trades.length < minN) {
+    return [];
+  }
+
+  const insights: TradeInsight[] = [];
+  const highConf = trades.filter((t) => t.confluenceScore >= 4);
+  const lowConf = trades.filter((t) => t.confluenceScore <= 2);
+  if (highConf.length >= 3 && lowConf.length >= 3) {
+    const highWr =
+      (highConf.filter((t) => t.pnl > 0).length / highConf.length) * 100;
+    const lowWr =
+      (lowConf.filter((t) => t.pnl > 0).length / lowConf.length) * 100;
+    if (highWr > lowWr + 5) {
+      insights.push({
+        kind: "strength",
+        text: `Higher confluence (≥4) wins ${highWr.toFixed(0)}% vs ${lowWr.toFixed(0)}% on low confluence — trust the checklist.`,
+      });
+    } else if (lowWr > highWr + 5) {
+      insights.push({
+        kind: "weakness",
+        text: `Low-confluence trades are outperforming high-confluence setups (${lowWr.toFixed(0)}% vs ${highWr.toFixed(0)}%) — review what “high confluence” means in practice.`,
+      });
+    }
+  }
+
+  const highAnxiety = trades.filter((t) => t.anxietyLevel >= 7);
+  if (highAnxiety.length >= 3) {
+    const avg = highAnxiety.reduce((s, t) => s + t.pnl, 0) / highAnxiety.length;
+    if (avg < 0) {
+      insights.push({
+        kind: "weakness",
+        text: `Anxiety ≥7 averages ${avg.toFixed(0)} across ${highAnxiety.length} trades — size down when the Heart Rate Index is elevated.`,
+      });
+    }
+  }
+
+  const longs = trades.filter((t) => t.direction === "long");
+  const shorts = trades.filter((t) => t.direction === "short");
+  if (longs.length >= 3 && shorts.length >= 3) {
+    const longExp = longs.reduce((s, t) => s + t.pnl, 0) / longs.length;
+    const shortExp = shorts.reduce((s, t) => s + t.pnl, 0) / shorts.length;
+    if (longExp > shortExp + 10) {
+      insights.push({
+        kind: "strength",
+        text: `Long expectancy (${longExp.toFixed(0)}) beats short (${shortExp.toFixed(0)}) — bias size toward the stronger side.`,
+      });
+    } else if (shortExp > longExp + 10) {
+      insights.push({
+        kind: "strength",
+        text: `Short expectancy (${shortExp.toFixed(0)}) beats long (${longExp.toFixed(0)}).`,
+      });
+    } else if (shortExp < 0 && longExp > 0) {
+      insights.push({
+        kind: "weakness",
+        text: `Short side is leaking (${shortExp.toFixed(0)} avg) while longs are positive — review short management.`,
+      });
+    }
+  }
+
+  const beStops = trades.filter((t) => t.exitOutcome === "tp1_be_sl");
+  if (beStops.length >= 3) {
+    const avg = beStops.reduce((s, t) => s + t.pnl, 0) / beStops.length;
+    insights.push({
+      kind: avg >= 0 ? "strength" : "weakness",
+      text: `After TP1 → BE: ${beStops.length} trades, avg ${avg >= 0 ? "+" : ""}${avg.toFixed(0)} — ${avg >= 0 ? "locking risk free is paying you" : "BE stops may be cutting winners early"}.`,
+    });
+  }
+
+  const weekdays = breakdownByWeekday(trades).filter((r) => r.tradeCount >= 2);
+  if (weekdays.length >= 2) {
+    const best = weekdays.reduce((a, b) => (a.totalPnl >= b.totalPnl ? a : b));
+    const worst = weekdays.reduce((a, b) => (a.totalPnl <= b.totalPnl ? a : b));
+    if (best.id !== worst.id) {
+      insights.push({
+        kind: "strength",
+        text: `Most profitable weekday: ${best.label} (${best.totalPnl >= 0 ? "+" : ""}${best.totalPnl.toFixed(0)}). Softest: ${worst.label}.`,
+      });
+    }
+  }
+
+  return insights.slice(0, 6);
+}
+
+export function evalProgressForAccount(
+  trades: Trade[],
+  accountId: AccountId,
+  startingBalance: number,
+  manualCurrentBalance: number | null
+): {
+  accountId: AccountId;
+  loggedNetPnl: number;
+  manualCurrentBalance: number | null;
+  impliedBalance: number;
+  startingBalance: number;
+} {
+  const accountTrades = trades.filter((t) => t.accountId === accountId);
+  const loggedNetPnl = accountTrades.reduce((s, t) => s + t.pnl, 0);
+  return {
+    accountId,
+    impliedBalance: startingBalance + loggedNetPnl,
+    loggedNetPnl,
+    manualCurrentBalance,
+    startingBalance,
   };
 }

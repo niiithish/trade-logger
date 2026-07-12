@@ -5,6 +5,7 @@ import {
   HeartPulseIcon,
   ImageIcon,
   MicIcon,
+  PencilIcon,
   StickyNoteIcon,
   Trash2Icon,
 } from "lucide-react";
@@ -24,6 +25,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { accountLabel } from "@/lib/accounts";
 import { beginDeleteTrade } from "@/lib/confirm-flow";
 import {
   formatConfluenceScore,
@@ -36,9 +38,17 @@ import {
   formatPnl,
   pnlBadgeVariant,
 } from "@/lib/format";
+import {
+  afterTp1StopLabel,
+  directionLabel,
+  exitOutcomeLabel,
+  mistakeTagLabel,
+} from "@/lib/trade-management";
 import type { Trade } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+/** Trade review surface — multi-section layout. */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: detail layout
 export function TradeDetail({ trade }: { trade: Trade }) {
   const router = useRouter();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -75,15 +85,24 @@ export function TradeDetail({ trade }: { trade: Trade }) {
           <ArrowLeftIcon data-icon="inline-start" />
           Back to trades
         </Link>
-        <Button
-          disabled={deleting}
-          onClick={() => beginDeleteTrade(() => setConfirmOpen(true))}
-          size="sm"
-          variant="destructive"
-        >
-          <Trash2Icon data-icon="inline-start" />
-          Delete trade
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            className={cn(buttonVariants({ size: "sm", variant: "secondary" }))}
+            href={`/trades/${trade.id}/edit`}
+          >
+            <PencilIcon data-icon="inline-start" />
+            Edit
+          </Link>
+          <Button
+            disabled={deleting}
+            onClick={() => beginDeleteTrade(() => setConfirmOpen(true))}
+            size="sm"
+            variant="destructive"
+          >
+            <Trash2Icon data-icon="inline-start" />
+            Delete trade
+          </Button>
+        </div>
       </div>
 
       <Card className="overflow-hidden">
@@ -99,6 +118,15 @@ export function TradeDetail({ trade }: { trade: Trade }) {
                   variant={pnlBadgeVariant(trade.pnl)}
                 >
                   {formatPnl(trade.pnl)}
+                </Badge>
+                <Badge variant="secondary">
+                  {accountLabel(trade.accountId)}
+                </Badge>
+                <Badge variant="outline">
+                  {directionLabel(trade.direction)}
+                </Badge>
+                <Badge variant="outline">
+                  {exitOutcomeLabel(trade.exitOutcome)}
                 </Badge>
               </div>
               <CardDescription>{formatDate(trade.createdAt)}</CardDescription>
@@ -148,7 +176,56 @@ export function TradeDetail({ trade }: { trade: Trade }) {
               tone={anxietyTone(trade.anxietyLevel)}
               value={`${trade.anxietyLevel}/10`}
             />
+            <MetricTile
+              hint={trade.managementStyle ?? "—"}
+              label="Exit outcome"
+              value={exitOutcomeLabel(trade.exitOutcome)}
+            />
+            {trade.managementStyle === "partials" ? (
+              <>
+                <MetricTile
+                  hint="Contracts at TP1"
+                  label="TP1 size"
+                  value={
+                    trade.tp1Contracts === null
+                      ? "—"
+                      : String(trade.tp1Contracts)
+                  }
+                />
+                <MetricTile
+                  label="After TP1 stop"
+                  value={afterTp1StopLabel(trade.afterTp1Stop)}
+                />
+              </>
+            ) : null}
+            {trade.plannedR !== null || trade.realizedR !== null ? (
+              <>
+                <MetricTile
+                  label="Planned R"
+                  value={trade.plannedR === null ? "—" : String(trade.plannedR)}
+                />
+                <MetricTile
+                  label="Realized R"
+                  value={
+                    trade.realizedR === null ? "—" : String(trade.realizedR)
+                  }
+                />
+              </>
+            ) : null}
           </div>
+
+          {trade.mistakeTags.length > 0 ? (
+            <section className="space-y-2 rounded-xl border border-border/60 bg-card/40 p-4">
+              <p className="font-medium text-sm">Mistake tags</p>
+              <div className="flex flex-wrap gap-2">
+                {trade.mistakeTags.map((tag) => (
+                  <Badge key={tag} variant="destructive">
+                    {mistakeTagLabel(tag)}
+                  </Badge>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           {confluenceItems.length > 0 ? (
             <section className="space-y-2 rounded-xl border border-border/60 bg-card/40 p-4">
@@ -201,7 +278,9 @@ export function TradeDetail({ trade }: { trade: Trade }) {
                     <MicIcon className="size-4 text-muted-foreground" />
                     Voice note
                   </div>
-                  <audio className="w-full" controls src={trade.voiceNote} />
+                  <audio className="w-full" controls src={trade.voiceNote}>
+                    <track kind="captions" />
+                  </audio>
                 </section>
               ) : null}
             </div>

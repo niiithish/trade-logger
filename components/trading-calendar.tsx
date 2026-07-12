@@ -10,6 +10,7 @@ import {
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import { useAccountFilter } from "@/components/account-filter";
 import { LogTradeButton } from "@/components/log-trade-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +24,7 @@ import {
   buildMonthGrid,
   computeDayStats,
   type DayStats,
+  filterTradesByAccount,
 } from "@/lib/analytics";
 import { formatPnl, pnlTextClass } from "@/lib/format";
 import type { Trade } from "@/lib/types";
@@ -49,10 +51,16 @@ function dayResultTone(pnl: number): "win" | "loss" | "flat" {
 }
 
 export function TradingCalendar({ trades }: { trades: Trade[] }) {
+  const { account } = useAccountFilter();
   const [month, setMonth] = useState(() => new Date());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  const dayStats = useMemo(() => computeDayStats(trades), [trades]);
+  const scopedTrades = useMemo(
+    () => filterTradesByAccount(trades, account),
+    [trades, account]
+  );
+
+  const dayStats = useMemo(() => computeDayStats(scopedTrades), [scopedTrades]);
   const { monthLabel, weeks, weekSummaries } = useMemo(
     () => buildMonthGrid(month, dayStats),
     [month, dayStats]
@@ -62,7 +70,7 @@ export function TradingCalendar({ trades }: { trades: Trade[] }) {
     if (!selectedKey) {
       return [];
     }
-    return trades
+    return scopedTrades
       .filter((t) => {
         const d = new Date(t.createdAt);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -72,7 +80,7 @@ export function TradingCalendar({ trades }: { trades: Trade[] }) {
         (a, b) =>
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
-  }, [trades, selectedKey]);
+  }, [scopedTrades, selectedKey]);
 
   const monthHasTrades = useMemo(
     () =>
@@ -81,6 +89,8 @@ export function TradingCalendar({ trades }: { trades: Trade[] }) {
       ),
     [weeks]
   );
+
+  const hasAnyScoped = scopedTrades.length > 0;
 
   return (
     <div className="flex flex-col gap-4 p-4 md:p-6">
@@ -181,9 +191,10 @@ export function TradingCalendar({ trades }: { trades: Trade[] }) {
         ))}
       </div>
 
-      {trades.length > 0 && !monthHasTrades ? (
+      {hasAnyScoped && !monthHasTrades ? (
         <p className="text-center text-muted-foreground text-sm">
-          No trades in {monthLabel}. Navigate months or{" "}
+          No trades in {monthLabel}
+          {account === "all" ? "" : " for this account"}. Navigate months or{" "}
           <LogTradeButton
             className="h-auto px-0 text-foreground"
             variant="link"

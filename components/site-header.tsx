@@ -1,6 +1,16 @@
 "use client";
 
+import { LogOutIcon } from "lucide-react";
+
+import { logoutAction } from "@/app/actions/auth";
+import { AccountSwitcher } from "@/components/account-filter";
+import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 export function SiteHeader({
@@ -8,11 +18,13 @@ export function SiteHeader({
   description,
   actions,
   className,
+  showAccountSwitcher = true,
 }: {
   title: string;
   description?: string;
   actions?: React.ReactNode;
   className?: string;
+  showAccountSwitcher?: boolean;
 }) {
   return (
     <header
@@ -33,9 +45,29 @@ export function SiteHeader({
           </p>
         ) : null}
       </div>
-      {actions ? (
-        <div className="flex shrink-0 items-center gap-2">{actions}</div>
-      ) : null}
+      <div className="flex shrink-0 items-center gap-2">
+        {actions}
+        {showAccountSwitcher ? <AccountSwitcher /> : null}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                aria-label="Lock site"
+                className="shrink-0"
+                onClick={() => {
+                  logoutAction().catch(() => undefined);
+                }}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              />
+            }
+          >
+            <LogOutIcon />
+          </TooltipTrigger>
+          <TooltipContent>Lock site</TooltipContent>
+        </Tooltip>
+      </div>
     </header>
   );
 }

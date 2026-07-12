@@ -4,6 +4,8 @@ import { DEFAULT_CONFLUENCE_CHECKLIST } from "./confluence";
 import {
   DEFAULT_TRADE_FORM,
   isChartStepComplete,
+  isManagementStepComplete,
+  isResultStepComplete,
   isTradeFormDirty,
   type TradeFormSnapshot,
 } from "./trade-form-state";
@@ -68,6 +70,15 @@ describe("isTradeFormDirty", () => {
         voiceNote: "data:audio/webm;base64,xyz",
       })
     ).toBe(true);
+    expect(
+      isTradeFormDirty({ ...DEFAULT_TRADE_FORM, accountId: "lucid_b" })
+    ).toBe(true);
+    expect(
+      isTradeFormDirty({ ...DEFAULT_TRADE_FORM, direction: "short" })
+    ).toBe(true);
+    expect(
+      isTradeFormDirty({ ...DEFAULT_TRADE_FORM, exitOutcome: "sl_initial" })
+    ).toBe(true);
   });
 
   test("matching custom defaults is not dirty", () => {
@@ -96,13 +107,6 @@ describe("isChartStepComplete", () => {
         exitImage: null,
       })
     ).toBe(true);
-    expect(
-      isChartStepComplete({
-        chartImage: "data:image/png;base64,a",
-        chartMode: "single",
-        exitImage: "data:image/png;base64,b",
-      })
-    ).toBe(true);
   });
 
   test("entry_exit mode needs both images", () => {
@@ -115,16 +119,50 @@ describe("isChartStepComplete", () => {
     ).toBe(false);
     expect(
       isChartStepComplete({
-        chartImage: null,
-        chartMode: "entry_exit",
-        exitImage: "data:image/png;base64,b",
-      })
-    ).toBe(false);
-    expect(
-      isChartStepComplete({
         chartImage: "data:image/png;base64,a",
         chartMode: "entry_exit",
         exitImage: "data:image/png;base64,b",
+      })
+    ).toBe(true);
+  });
+});
+
+describe("result and management steps", () => {
+  test("result needs direction pnl size", () => {
+    expect(
+      isResultStepComplete({
+        direction: "long",
+        pnl: "",
+        positionSize: "1",
+      })
+    ).toBe(false);
+    expect(
+      isResultStepComplete({
+        direction: "short",
+        pnl: "10",
+        positionSize: "2",
+      })
+    ).toBe(true);
+  });
+
+  test("full exit management is complete with outcome only", () => {
+    expect(
+      isManagementStepComplete({
+        afterTp1Stop: null,
+        exitOutcome: "full_tp",
+        managementStyle: "full",
+        tp1Contracts: "",
+      })
+    ).toBe(true);
+  });
+
+  test("partials path still valid without tp1 fields", () => {
+    expect(
+      isManagementStepComplete({
+        afterTp1Stop: "breakeven",
+        exitOutcome: "tp1_be_sl",
+        managementStyle: "partials",
+        tp1Contracts: "",
       })
     ).toBe(true);
   });

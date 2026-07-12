@@ -1,5 +1,6 @@
 import { avg, count, desc, eq, sql, sum } from "drizzle-orm";
 
+import { isAccountId } from "@/lib/accounts";
 import {
   parseConfluenceChecklist,
   serializeConfluenceChecklist,
@@ -7,6 +8,14 @@ import {
 import { db } from "@/lib/db";
 import { trades } from "@/lib/db/schema";
 import { toDayKey } from "@/lib/format";
+import {
+  isAfterTp1Stop,
+  isDirection,
+  isExitOutcome,
+  isManagementStyle,
+  parseMistakeTags,
+  serializeMistakeTags,
+} from "@/lib/trade-management";
 import type {
   DaySummary,
   Ticker,
@@ -17,25 +26,68 @@ import type {
 
 function mapTrade(row: typeof trades.$inferSelect): Trade {
   return {
+    accountId: isAccountId(row.accountId) ? row.accountId : null,
+    afterTp1Stop: isAfterTp1Stop(row.afterTp1Stop) ? row.afterTp1Stop : null,
     anxietyLevel: row.anxietyLevel,
     chartImage: row.chartImage,
     confluenceChecklist: parseConfluenceChecklist(row.confluenceChecklist),
     confluenceScore: row.confluenceScore,
     createdAt: row.createdAt,
+    direction: isDirection(row.direction) ? row.direction : null,
     exitImage: row.exitImage ?? null,
+    exitOutcome: isExitOutcome(row.exitOutcome) ? row.exitOutcome : null,
     id: row.id,
+    managementStyle: isManagementStyle(row.managementStyle)
+      ? row.managementStyle
+      : null,
+    mistakeTags: parseMistakeTags(row.mistakeTags),
     notesText: row.notesText,
+    plannedR: row.plannedR ?? null,
     pnl: row.pnl,
     positionSize: row.positionSize,
+    realizedR: row.realizedR ?? null,
     ticker: row.ticker as Ticker,
+    tp1Contracts: row.tp1Contracts ?? null,
     voiceNote: row.voiceNote,
     voiceNoteMime: row.voiceNoteMime,
   };
 }
 
+function tradeValues(input: TradeInput) {
+  return {
+    accountId: input.accountId,
+    afterTp1Stop:
+      input.managementStyle === "partials"
+        ? (input.afterTp1Stop ?? null)
+        : null,
+    anxietyLevel: input.anxietyLevel,
+    chartImage: input.chartImage,
+    confluenceChecklist: serializeConfluenceChecklist(
+      input.confluenceChecklist
+    ),
+    confluenceScore: input.confluenceScore,
+    direction: input.direction,
+    exitImage: input.exitImage ?? null,
+    exitOutcome: input.exitOutcome,
+    managementStyle: input.managementStyle,
+    mistakeTags: serializeMistakeTags(input.mistakeTags ?? []),
+    notesText: input.notesText ?? null,
+    plannedR: input.plannedR ?? null,
+    pnl: input.pnl,
+    positionSize: input.positionSize,
+    realizedR: input.realizedR ?? null,
+    ticker: input.ticker,
+    tp1Contracts:
+      input.managementStyle === "partials"
+        ? (input.tp1Contracts ?? null)
+        : null,
+    voiceNote: input.voiceNote ?? null,
+    voiceNoteMime: input.voiceNoteMime ?? null,
+  };
+}
+
 export async function listTrades(): Promise<Trade[]> {
   const rows = await db.select().from(trades).orderBy(desc(trades.createdAt));
-
   return rows.map(mapTrade);
 }
 
@@ -55,25 +107,25 @@ export async function createTrade(input: TradeInput): Promise<Trade> {
   const [row] = await db
     .insert(trades)
     .values({
-      anxietyLevel: input.anxietyLevel,
-      chartImage: input.chartImage,
-      confluenceChecklist: serializeConfluenceChecklist(
-        input.confluenceChecklist
-      ),
-      confluenceScore: input.confluenceScore,
+      ...tradeValues(input),
       createdAt,
-      exitImage: input.exitImage ?? null,
       id,
-      notesText: input.notesText ?? null,
-      pnl: input.pnl,
-      positionSize: input.positionSize,
-      ticker: input.ticker,
-      voiceNote: input.voiceNote ?? null,
-      voiceNoteMime: input.voiceNoteMime ?? null,
     })
     .returning();
 
   return mapTrade(row);
+}
+
+export async function updateTrade(
+  id: string,
+  input: TradeInput
+): Promise<Trade | null> {
+  const [row] = await db
+    .update(trades)
+    .set(tradeValues(input))
+    .where(eq(trades.id, id))
+    .returning();
+  return row ? mapTrade(row) : null;
 }
 
 export async function deleteTrade(id: string): Promise<void> {

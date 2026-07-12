@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { type AccountId, isAccountId } from "@/lib/accounts";
 import { chartImageValidationError } from "@/lib/chart-image";
 import {
   MAX_CONFLUENCE_SCORE,
@@ -8,7 +9,20 @@ import {
   scoreConfluence,
   validateConfluenceChecklist,
 } from "@/lib/confluence";
-import { createTrade, deleteTrade } from "@/lib/trades";
+import {
+  type AfterTp1Stop,
+  type Direction,
+  type ExitOutcome,
+  isAfterTp1Stop,
+  isDirection,
+  isExitOutcome,
+  isManagementStyle,
+  isMistakeTag,
+  type ManagementStyle,
+  type MistakeTag,
+  validateTradeManagement,
+} from "@/lib/trade-management";
+import { createTrade, deleteTrade, updateTrade } from "@/lib/trades";
 import type { ChartImageMode, Ticker } from "@/lib/types";
 
 export type ActionResult =
@@ -37,6 +51,22 @@ function revalidateTradePaths(id?: string) {
   revalidatePath("/calendar");
   if (id) {
     revalidatePath(`/trades/${id}`);
+    revalidatePath(`/trades/${id}/edit`);
+  }
+}
+
+function parseMistakeTagsField(raw: string): MistakeTag[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const data: unknown = JSON.parse(raw);
+    if (!Array.isArray(data)) {
+      return [];
+    }
+    return data.filter(isMistakeTag);
+  } catch {
+    return [];
   }
 }
 
@@ -46,17 +76,31 @@ function parseCreateTradeFields(formData: FormData) {
     chartModeRaw === "entry_exit" ? "entry_exit" : "single";
   const checklistRaw = asString(formData.get("confluenceChecklist"));
   const confluenceChecklist = parseConfluenceChecklist(checklistRaw);
+  const accountRaw = asString(formData.get("accountId"));
+  const directionRaw = asString(formData.get("direction"));
+  const managementRaw = asString(formData.get("managementStyle"));
+  const outcomeRaw = asString(formData.get("exitOutcome"));
+  const afterTp1Raw = asString(formData.get("afterTp1Stop"));
 
   return {
+    accountId: isAccountId(accountRaw) ? accountRaw : null,
+    afterTp1Stop: isAfterTp1Stop(afterTp1Raw) ? afterTp1Raw : null,
     anxietyLevel: asNumber(formData.get("anxietyLevel")),
     chartImage: asString(formData.get("chartImage")),
     chartMode,
     confluenceChecklist,
+    direction: isDirection(directionRaw) ? directionRaw : null,
     exitImage: asString(formData.get("exitImage")) || null,
+    exitOutcome: isExitOutcome(outcomeRaw) ? outcomeRaw : null,
+    managementStyle: isManagementStyle(managementRaw) ? managementRaw : null,
+    mistakeTags: parseMistakeTagsField(asString(formData.get("mistakeTags"))),
     notesText: asString(formData.get("notesText")) || null,
+    plannedR: asNumber(formData.get("plannedR")),
     pnl: asNumber(formData.get("pnl")),
     positionSize: asNumber(formData.get("positionSize")),
+    realizedR: asNumber(formData.get("realizedR")),
     ticker: asString(formData.get("ticker")) as Ticker,
+    tp1Contracts: asNumber(formData.get("tp1Contracts")),
     voiceNote: asString(formData.get("voiceNote")) || null,
     voiceNoteMime: asString(formData.get("voiceNoteMime")) || null,
   };
@@ -65,10 +109,25 @@ function parseCreateTradeFields(formData: FormData) {
 function validateTradeCoreFields(
   fields: ReturnType<typeof parseCreateTradeFields>
 ): string | null {
-  const { anxietyLevel, pnl, positionSize, ticker } = fields;
+  const {
+    accountId,
+    anxietyLevel,
+    direction,
+    exitOutcome,
+    managementStyle,
+    pnl,
+    positionSize,
+    ticker,
+  } = fields;
 
+  if (!(accountId && isAccountId(accountId))) {
+    return "Select a trading account (Lucid A or Lucid B).";
+  }
   if (ticker !== "MNQ" && ticker !== "MES") {
     return "Ticker must be MNQ or MES.";
+  }
+  if (!(direction && isDirection(direction))) {
+    return "Select long or short.";
   }
   if (pnl === null) {
     return "P&L is required.";
@@ -84,34 +143,48 @@ function validateTradeCoreFields(
   ) {
     return "Anxiety level must be a whole number from 1 to 10.";
   }
+  const managementError = validateTradeManagement({
+    afterTp1Stop: fields.afterTp1Stop,
+    exitOutcome,
+    managementStyle,
+    tp1Contracts: fields.tp1Contracts,
+  });
+  if (managementError) {
+    return managementError;
+  }
   return null;
 }
 
 function validateTradeMediaFields(
-  fields: ReturnType<typeof parseCreateTradeFields>
+  fields: ReturnType<typeof parseCreateTradeFields>,
+  options?: { requireChart?: boolean; requireNotes?: boolean }
 ): string | null {
   const { chartImage, chartMode, exitImage, notesText, voiceNote } = fields;
+  const requireChart = options?.requireChart ?? true;
+  const requireNotes = options?.requireNotes ?? true;
 
-  const primaryLabel =
-    chartMode === "entry_exit" ? "Entry chart image" : "Chart image";
-  const chartError = chartImageValidationError(chartImage, primaryLabel);
-  if (chartError) {
-    return chartError;
-  }
-
-  if (chartMode === "entry_exit") {
-    const exitError = chartImageValidationError(
-      exitImage ?? "",
-      "Exit chart image"
-    );
-    if (exitError) {
-      return exitError;
+  if (requireChart) {
+    const primaryLabel =
+      chartMode === "entry_exit" ? "Entry chart image" : "Chart image";
+    const chartError = chartImageValidationError(chartImage, primaryLabel);
+    if (chartError) {
+      return chartError;
     }
-  } else if (exitImage) {
-    return "Remove the exit image or switch to Entry + Exit mode.";
+
+    if (chartMode === "entry_exit") {
+      const exitError = chartImageValidationError(
+        exitImage ?? "",
+        "Exit chart image"
+      );
+      if (exitError) {
+        return exitError;
+      }
+    } else if (exitImage) {
+      return "Remove the exit image or switch to Entry + Exit mode.";
+    }
   }
 
-  if (!(notesText || voiceNote)) {
+  if (requireNotes && !(notesText || voiceNote)) {
     return "Add a text note or record a voice note.";
   }
   if (voiceNote && voiceNote.length > 8_000_000) {
@@ -148,6 +221,67 @@ function validateCreateTradeFields(
   );
 }
 
+function toTradeInput(fields: ReturnType<typeof parseCreateTradeFields>) {
+  const {
+    accountId,
+    afterTp1Stop,
+    anxietyLevel,
+    chartImage,
+    chartMode,
+    confluenceChecklist,
+    direction,
+    exitImage,
+    exitOutcome,
+    managementStyle,
+    mistakeTags,
+    notesText,
+    plannedR,
+    pnl,
+    positionSize,
+    realizedR,
+    ticker,
+    tp1Contracts,
+    voiceNote,
+    voiceNoteMime,
+  } = fields;
+
+  if (
+    pnl === null ||
+    positionSize === null ||
+    anxietyLevel === null ||
+    !confluenceChecklist ||
+    !accountId ||
+    !direction ||
+    !managementStyle ||
+    !exitOutcome
+  ) {
+    return null;
+  }
+
+  return {
+    accountId: accountId as AccountId,
+    afterTp1Stop: afterTp1Stop as AfterTp1Stop | null,
+    anxietyLevel,
+    chartImage,
+    confluenceChecklist,
+    confluenceScore: scoreConfluence(confluenceChecklist),
+    direction: direction as Direction,
+    exitImage: chartMode === "entry_exit" ? exitImage : null,
+    exitOutcome: exitOutcome as ExitOutcome,
+    managementStyle: managementStyle as ManagementStyle,
+    mistakeTags,
+    notesText,
+    plannedR,
+    pnl,
+    positionSize,
+    realizedR,
+    ticker,
+    tp1Contracts,
+    voiceNote,
+    voiceNoteMime,
+  };
+}
+
 export async function createTradeAction(
   formData: FormData
 ): Promise<ActionResult> {
@@ -158,50 +292,63 @@ export async function createTradeAction(
       return fail(validationError);
     }
 
-    const {
-      anxietyLevel,
-      chartImage,
-      chartMode,
-      confluenceChecklist,
-      exitImage,
-      notesText,
-      pnl,
-      positionSize,
-      ticker,
-      voiceNote,
-      voiceNoteMime,
-    } = fields;
-
-    // Validated above — narrow for the type checker.
-    if (
-      pnl === null ||
-      positionSize === null ||
-      anxietyLevel === null ||
-      !confluenceChecklist
-    ) {
+    const input = toTradeInput(fields);
+    if (!input) {
       return fail("Invalid trade fields.");
     }
 
-    const trade = await createTrade({
-      anxietyLevel,
-      chartImage,
-      confluenceChecklist,
-      confluenceScore: scoreConfluence(confluenceChecklist),
-      exitImage: chartMode === "entry_exit" ? exitImage : null,
-      notesText,
-      pnl,
-      positionSize,
-      ticker,
-      voiceNote,
-      voiceNoteMime,
-    });
-
+    const trade = await createTrade(input);
     revalidateTradePaths(trade.id);
     return { id: trade.id, success: true };
   } catch (error) {
     console.error("createTradeAction failed:", error);
     return fail(
       error instanceof Error ? error.message : "Failed to save trade."
+    );
+  }
+}
+
+export async function updateTradeAction(
+  id: string,
+  formData: FormData
+): Promise<ActionResult> {
+  try {
+    if (!id) {
+      return fail("Trade id is required.");
+    }
+    const fields = parseCreateTradeFields(formData);
+    // Edit may keep existing voice; notes still required as text OR existing voice via form.
+    const validationError =
+      validateTradeCoreFields(fields) ??
+      validateTradeConfluenceFields(fields) ??
+      validateTradeMediaFields(fields, {
+        requireChart: Boolean(fields.chartImage),
+        requireNotes: true,
+      });
+    if (validationError) {
+      return fail(validationError);
+    }
+
+    const input = toTradeInput(fields);
+    if (!input) {
+      return fail("Invalid trade fields.");
+    }
+
+    // If chart not re-sent empty path shouldn't happen; chart is always in form.
+    if (!fields.chartImage) {
+      return fail("Chart image is required.");
+    }
+
+    const trade = await updateTrade(id, input);
+    if (!trade) {
+      return fail("Trade not found.");
+    }
+    revalidateTradePaths(trade.id);
+    return { id: trade.id, success: true };
+  } catch (error) {
+    console.error("updateTradeAction failed:", error);
+    return fail(
+      error instanceof Error ? error.message : "Failed to update trade."
     );
   }
 }

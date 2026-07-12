@@ -34,9 +34,9 @@ describe("verifySitePassword", () => {
 
   test("accepts matching password from env", () => {
     const prev = process.env.SITE_PASSWORD;
-    process.env.SITE_PASSWORD = "Nithish@06";
+    process.env.SITE_PASSWORD = "fixture-password";
     try {
-      expect(verifySitePassword("Nithish@06")).toBe(true);
+      expect(verifySitePassword("fixture-password")).toBe(true);
       expect(verifySitePassword("wrong")).toBe(false);
     } finally {
       if (prev === undefined) {

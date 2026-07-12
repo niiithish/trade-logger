@@ -107,7 +107,11 @@ export function AppSidebar() {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton onClick={openDialog} tooltip="Log trade">
+            <SidebarMenuButton
+              className="bg-white font-medium text-neutral-950 hover:bg-white/90 hover:text-neutral-950 active:bg-white/85 data-[active=true]:bg-white data-[active=true]:text-neutral-950 [&>svg]:text-neutral-950"
+              onClick={openDialog}
+              tooltip="Log trade"
+            >
               <PlusCircleIcon />
               <span>Log trade</span>
             </SidebarMenuButton>

@@ -274,40 +274,54 @@ function StepHeader({
   );
 }
 
-function OptionCard({
+/**
+ * Compact selectable chip. Use a plain <label> — not FieldLabel —
+ * so FieldLabel's has-data-checked:bg-primary/* wash never appears.
+ */
+function OptionChip({
   description,
   label,
   selected,
   titleClassName,
+  value,
 }: {
-  description: string;
+  description?: string;
   label: string;
   selected: boolean;
   titleClassName?: string;
+  value: string;
 }) {
   return (
-    <div
+    // RadioGroupItem is the control nested in the label (Base UI radio).
+    // biome-ignore lint/a11y/noLabelWithoutControl: RadioGroupItem is nested
+    <label
       className={cn(
-        "flex flex-col items-start gap-0.5 rounded-xl border px-3 py-3 transition-colors",
+        "relative flex cursor-pointer flex-col items-start gap-0 rounded-md border bg-transparent px-2.5 py-1.5 transition-colors",
         selected
-          ? "border-primary bg-primary/10 ring-1 ring-primary/40"
-          : "border-border bg-transparent hover:bg-selected/60"
+          ? "border-strong text-strong"
+          : "border-border text-muted-foreground hover:border-strong/50 hover:text-foreground"
       )}
       data-selected={selected ? "true" : "false"}
     >
+      <RadioGroupItem
+        className="pointer-events-none absolute size-px overflow-hidden opacity-0"
+        value={value}
+      />
       <span
         className={cn(
-          "font-medium tracking-tight",
-          selected ? "text-strong" : "text-strong",
-          titleClassName ?? "text-base"
+          "font-medium text-sm tracking-tight",
+          selected ? "text-strong" : "text-inherit",
+          titleClassName
         )}
       >
         {label}
       </span>
-      <span className="text-muted-foreground text-xs leading-snug">
-        {description}
-      </span>
-    </div>
+      {description ? (
+        <span className="text-[10px] text-muted-foreground leading-snug">
+          {description}
+        </span>
+      ) : null}
+    </label>
   );
 }
 
@@ -871,14 +885,13 @@ export function TradeForm({
   function renderStep() {
     if (currentStepId === "contract") {
       return (
-        <div className="space-y-6">
+        <div className="space-y-4">
           <div>
-            <StepHeader
-              description="Which Lucid eval did you trade?"
-              title="Account"
-            />
+            <p className="mb-2 font-medium text-muted-foreground text-xs">
+              Account
+            </p>
             <RadioGroup
-              className="grid gap-3"
+              className="grid grid-cols-2 gap-2"
               onValueChange={(value) => {
                 if (value === "lucid_a" || value === "lucid_b") {
                   setAccountId(value);
@@ -886,26 +899,23 @@ export function TradeForm({
               }}
               value={accountId}
             >
-              {TRADING_ACCOUNTS.map((account) => {
-                const selected = accountId === account.id;
-                return (
-                  <FieldLabel className="cursor-pointer" key={account.id}>
-                    <RadioGroupItem className="sr-only" value={account.id} />
-                    <OptionCard
-                      description={`${account.phase} · start $${account.startingBalance.toLocaleString()}`}
-                      label={account.shortLabel}
-                      selected={selected}
-                      titleClassName="text-lg"
-                    />
-                  </FieldLabel>
-                );
-              })}
+              {TRADING_ACCOUNTS.map((account) => (
+                <OptionChip
+                  description={`$${account.startingBalance.toLocaleString()}`}
+                  key={account.id}
+                  label={account.shortLabel}
+                  selected={accountId === account.id}
+                  value={account.id}
+                />
+              ))}
             </RadioGroup>
           </div>
           <div>
-            <StepHeader description="Which micro contract?" title="Contract" />
+            <p className="mb-2 font-medium text-muted-foreground text-xs">
+              Contract
+            </p>
             <RadioGroup
-              className="grid grid-cols-2 gap-3"
+              className="grid grid-cols-2 gap-2"
               onValueChange={(value) => {
                 if (value === "MNQ" || value === "MES") {
                   setTicker(value);
@@ -913,20 +923,16 @@ export function TradeForm({
               }}
               value={ticker}
             >
-              {tickerOptions.map((option) => {
-                const selected = ticker === option.value;
-                return (
-                  <FieldLabel className="cursor-pointer" key={option.value}>
-                    <RadioGroupItem className="sr-only" value={option.value} />
-                    <OptionCard
-                      description={option.description}
-                      label={option.value}
-                      selected={selected}
-                      titleClassName="font-mono text-2xl"
-                    />
-                  </FieldLabel>
-                );
-              })}
+              {tickerOptions.map((option) => (
+                <OptionChip
+                  description={option.description}
+                  key={option.value}
+                  label={option.value}
+                  selected={ticker === option.value}
+                  titleClassName="font-mono text-sm"
+                  value={option.value}
+                />
+              ))}
             </RadioGroup>
           </div>
         </div>
@@ -944,7 +950,7 @@ export function TradeForm({
             <Field>
               <FieldLabel>Direction</FieldLabel>
               <RadioGroup
-                className="grid grid-cols-2 gap-3"
+                className="grid grid-cols-2 gap-2"
                 onValueChange={(value) => {
                   if (value === "long" || value === "short") {
                     setDirection(value);
@@ -952,22 +958,14 @@ export function TradeForm({
                 }}
                 value={direction}
               >
-                {directionOptions.map((option) => {
-                  const selected = direction === option.value;
-                  return (
-                    <FieldLabel className="cursor-pointer" key={option.value}>
-                      <RadioGroupItem
-                        className="sr-only"
-                        value={option.value}
-                      />
-                      <OptionCard
-                        description={option.description}
-                        label={option.label}
-                        selected={selected}
-                      />
-                    </FieldLabel>
-                  );
-                })}
+                {directionOptions.map((option) => (
+                  <OptionChip
+                    key={option.value}
+                    label={option.label}
+                    selected={direction === option.value}
+                    value={option.value}
+                  />
+                ))}
               </RadioGroup>
             </Field>
             <Field>
@@ -1074,22 +1072,15 @@ export function TradeForm({
                       value: "partials" as const,
                     },
                   ] as const
-                ).map((option) => {
-                  const selected = managementStyle === option.value;
-                  return (
-                    <FieldLabel className="cursor-pointer" key={option.value}>
-                      <RadioGroupItem
-                        className="sr-only"
-                        value={option.value}
-                      />
-                      <OptionCard
-                        description={option.description}
-                        label={option.label}
-                        selected={selected}
-                      />
-                    </FieldLabel>
-                  );
-                })}
+                ).map((option) => (
+                  <OptionChip
+                    description={option.description}
+                    key={option.value}
+                    label={option.label}
+                    selected={managementStyle === option.value}
+                    value={option.value}
+                  />
+                ))}
               </RadioGroup>
             </Field>
 
@@ -1101,10 +1092,10 @@ export function TradeForm({
                   return (
                     <button
                       className={cn(
-                        "rounded-full border px-3 py-1.5 text-left text-xs transition-colors",
+                        "rounded-full border bg-transparent px-3 py-1.5 text-left text-xs transition-colors",
                         selected
-                          ? "border-strong bg-selected font-medium text-strong"
-                          : "border-border text-muted-foreground hover:bg-selected/60"
+                          ? "border-strong font-medium text-strong"
+                          : "border-border text-muted-foreground hover:border-strong/50 hover:text-foreground"
                       )}
                       key={option.id}
                       onClick={() => setExitOutcome(option.id)}
@@ -1146,8 +1137,8 @@ export function TradeForm({
                           className={cn(
                             "rounded-full border px-3 py-1.5 text-xs transition-colors",
                             selected
-                              ? "border-strong bg-selected font-medium text-strong"
-                              : "border-border text-muted-foreground hover:bg-selected/60"
+                              ? "border-strong font-medium text-strong"
+                              : "border-border text-muted-foreground hover:border-strong/50 hover:text-foreground"
                           )}
                           key={option.id}
                           onClick={() =>
@@ -1175,7 +1166,7 @@ export function TradeForm({
                         "rounded-full border px-3 py-1.5 text-xs transition-colors",
                         selected
                           ? "border-red-500/50 bg-red-500/10 font-medium text-red-300"
-                          : "border-border text-muted-foreground hover:bg-selected/60"
+                          : "border-border text-muted-foreground hover:border-strong/50 hover:text-foreground"
                       )}
                       key={option.id}
                       onClick={() => toggleMistakeTag(option.id)}
@@ -1208,19 +1199,15 @@ export function TradeForm({
             }}
             value={chartMode}
           >
-            {chartModeOptions.map((option) => {
-              const selected = chartMode === option.value;
-              return (
-                <FieldLabel className="cursor-pointer" key={option.value}>
-                  <RadioGroupItem className="sr-only" value={option.value} />
-                  <OptionCard
-                    description={option.description}
-                    label={option.label}
-                    selected={selected}
-                  />
-                </FieldLabel>
-              );
-            })}
+            {chartModeOptions.map((option) => (
+              <OptionChip
+                description={option.description}
+                key={option.value}
+                label={option.label}
+                selected={chartMode === option.value}
+                value={option.value}
+              />
+            ))}
           </RadioGroup>
 
           {chartMode === "single" ? (

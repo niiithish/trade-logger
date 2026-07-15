@@ -100,9 +100,19 @@ export async function getTrade(id: string): Promise<Trade | null> {
   return row ? mapTrade(row) : null;
 }
 
+function resolveCreatedAt(input: TradeInput): string {
+  if (input.createdAt) {
+    const parsed = new Date(input.createdAt);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  return new Date().toISOString();
+}
+
 export async function createTrade(input: TradeInput): Promise<Trade> {
   const id = crypto.randomUUID();
-  const createdAt = new Date().toISOString();
+  const createdAt = resolveCreatedAt(input);
 
   const [row] = await db
     .insert(trades)
@@ -122,7 +132,10 @@ export async function updateTrade(
 ): Promise<Trade | null> {
   const [row] = await db
     .update(trades)
-    .set(tradeValues(input))
+    .set({
+      ...tradeValues(input),
+      createdAt: resolveCreatedAt(input),
+    })
     .where(eq(trades.id, id))
     .returning();
   return row ? mapTrade(row) : null;

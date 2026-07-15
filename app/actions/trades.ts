@@ -22,6 +22,7 @@ import {
   type MistakeTag,
   validateTradeManagement,
 } from "@/lib/trade-management";
+import { fromDatetimeLocalValue } from "@/lib/format";
 import { createTrade, deleteTrade, updateTrade } from "@/lib/trades";
 import type { ChartImageMode, Ticker } from "@/lib/types";
 
@@ -82,6 +83,11 @@ function parseCreateTradeFields(formData: FormData) {
   const outcomeRaw = asString(formData.get("exitOutcome"));
   const afterTp1Raw = asString(formData.get("afterTp1Stop"));
 
+  const tradeDateRaw = asString(formData.get("tradeDate"));
+  const createdAt =
+    fromDatetimeLocalValue(tradeDateRaw) ??
+    (tradeDateRaw ? null : new Date().toISOString());
+
   return {
     accountId: isAccountId(accountRaw) ? accountRaw : null,
     afterTp1Stop: isAfterTp1Stop(afterTp1Raw) ? afterTp1Raw : null,
@@ -89,6 +95,7 @@ function parseCreateTradeFields(formData: FormData) {
     chartImage: asString(formData.get("chartImage")),
     chartMode,
     confluenceChecklist,
+    createdAt,
     direction: isDirection(directionRaw) ? directionRaw : null,
     exitImage: asString(formData.get("exitImage")) || null,
     exitOutcome: isExitOutcome(outcomeRaw) ? outcomeRaw : null,
@@ -100,6 +107,7 @@ function parseCreateTradeFields(formData: FormData) {
     positionSize: asNumber(formData.get("positionSize")),
     realizedR: asNumber(formData.get("realizedR")),
     ticker: asString(formData.get("ticker")) as Ticker,
+    tradeDateRaw,
     tp1Contracts: asNumber(formData.get("tp1Contracts")),
     voiceNote: asString(formData.get("voiceNote")) || null,
     voiceNoteMime: asString(formData.get("voiceNoteMime")) || null,
@@ -134,6 +142,12 @@ function validateTradeCoreFields(
   }
   if (positionSize === null || positionSize <= 0) {
     return "Position size must be greater than 0.";
+  }
+  if (fields.tradeDateRaw && !fields.createdAt) {
+    return "Trade date is invalid.";
+  }
+  if (!fields.createdAt) {
+    return "Trade date is required (use it to backfill a missed day).";
   }
   if (
     anxietyLevel === null ||
@@ -265,6 +279,7 @@ function toTradeInput(fields: ReturnType<typeof parseCreateTradeFields>) {
     chartImage,
     confluenceChecklist,
     confluenceScore: scoreConfluence(confluenceChecklist),
+    createdAt: fields.createdAt ?? undefined,
     direction: direction as Direction,
     exitImage: chartMode === "entry_exit" ? exitImage : null,
     exitOutcome: exitOutcome as ExitOutcome,

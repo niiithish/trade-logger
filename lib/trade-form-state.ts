@@ -20,6 +20,7 @@ import {
   type MistakeTag,
   validateTradeManagement,
 } from "@/lib/trade-management";
+import { toDatetimeLocalValue } from "@/lib/format";
 import type { ChartImageMode, Ticker } from "@/lib/types";
 
 /** Snapshot of log-trade form fields used for dirty detection and reset. */
@@ -30,6 +31,8 @@ export interface TradeFormSnapshot {
   chartImage: string | null;
   chartMode: ChartImageMode;
   confluenceChecklist: ConfluenceChecklist;
+  /** datetime-local string for trade time (local timezone). */
+  tradeDate: string;
   direction: Direction;
   exitImage: string | null;
   exitOutcome: ExitOutcome;
@@ -45,6 +48,10 @@ export interface TradeFormSnapshot {
   voiceNote: string | null;
 }
 
+export function defaultTradeDateValue(): string {
+  return toDatetimeLocalValue(new Date());
+}
+
 export const DEFAULT_TRADE_FORM: TradeFormSnapshot = {
   accountId: DEFAULT_ACCOUNT_ID,
   afterTp1Stop: null,
@@ -52,6 +59,7 @@ export const DEFAULT_TRADE_FORM: TradeFormSnapshot = {
   chartImage: null,
   chartMode: "single",
   confluenceChecklist: DEFAULT_CONFLUENCE_CHECKLIST,
+  tradeDate: "",
   direction: "long",
   exitImage: null,
   exitOutcome: "full_tp",
@@ -79,6 +87,7 @@ export function isTradeFormDirty(
     state.accountId !== defaults.accountId ||
     state.ticker !== defaults.ticker ||
     state.direction !== defaults.direction ||
+    state.tradeDate !== defaults.tradeDate ||
     state.pnl !== defaults.pnl ||
     state.positionSize !== defaults.positionSize ||
     state.managementStyle !== defaults.managementStyle ||
@@ -128,12 +137,16 @@ export function confluenceScoreFromSnapshot(
 }
 
 export function isResultStepComplete(
-  state: Pick<TradeFormSnapshot, "pnl" | "positionSize" | "direction">
+  state: Pick<
+    TradeFormSnapshot,
+    "pnl" | "positionSize" | "direction" | "tradeDate"
+  >
 ): boolean {
   return (
     state.pnl.trim().length > 0 &&
     state.positionSize.trim().length > 0 &&
-    isDirection(state.direction)
+    isDirection(state.direction) &&
+    state.tradeDate.trim().length > 0
   );
 }
 
@@ -170,6 +183,7 @@ export function tradeFormSnapshotFromTrade(input: {
   anxietyLevel: number;
   chartImage: string;
   confluenceChecklist: ConfluenceChecklist | null;
+  createdAt?: string;
   direction: Direction | null;
   exitImage: string | null;
   exitOutcome: ExitOutcome | null;
@@ -193,6 +207,9 @@ export function tradeFormSnapshotFromTrade(input: {
     chartMode: input.exitImage ? "entry_exit" : "single",
     confluenceChecklist:
       input.confluenceChecklist ?? DEFAULT_CONFLUENCE_CHECKLIST,
+    tradeDate: input.createdAt
+      ? toDatetimeLocalValue(input.createdAt)
+      : defaultTradeDateValue(),
     direction: input.direction ?? "long",
     exitImage: input.exitImage,
     exitOutcome: isExitOutcome(input.exitOutcome) ? input.exitOutcome : "other",

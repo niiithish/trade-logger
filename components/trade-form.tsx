@@ -52,6 +52,7 @@ import {
 } from "@/lib/confluence";
 import {
   DEFAULT_TRADE_FORM,
+  defaultTradeDateValue,
   isChartStepComplete,
   isManagementStepComplete,
   isResultStepComplete,
@@ -375,6 +376,7 @@ export function TradeForm({
     return {
       ...DEFAULT_TRADE_FORM,
       accountId: preferredAccountId,
+      tradeDate: defaultTradeDateValue(),
     };
   }, [initialTrade, preferredAccountId]);
 
@@ -384,6 +386,9 @@ export function TradeForm({
   const [ticker, setTicker] = useState<Ticker>(initialSnapshot.ticker);
   const [direction, setDirection] = useState<Direction>(
     initialSnapshot.direction
+  );
+  const [tradeDate, setTradeDate] = useState(
+    initialSnapshot.tradeDate || defaultTradeDateValue()
   );
   const [pnl, setPnl] = useState(initialSnapshot.pnl);
   const [positionSize, setPositionSize] = useState(
@@ -444,6 +449,7 @@ export function TradeForm({
       chartImage,
       chartMode,
       confluenceChecklist,
+      tradeDate,
       direction,
       exitImage,
       exitOutcome,
@@ -465,6 +471,7 @@ export function TradeForm({
       chartImage,
       chartMode,
       confluenceChecklist,
+      tradeDate,
       direction,
       exitImage,
       exitOutcome,
@@ -672,6 +679,7 @@ export function TradeForm({
     setAccountId(preferredAccountId);
     setTicker(DEFAULT_TRADE_FORM.ticker);
     setDirection(DEFAULT_TRADE_FORM.direction);
+    setTradeDate(defaultTradeDateValue());
     setPnl(DEFAULT_TRADE_FORM.pnl);
     setPositionSize(DEFAULT_TRADE_FORM.positionSize);
     setManagementStyle(DEFAULT_TRADE_FORM.managementStyle);
@@ -725,6 +733,7 @@ export function TradeForm({
       setAccountId(snap.accountId);
       setTicker(snap.ticker);
       setDirection(snap.direction);
+      setTradeDate(snap.tradeDate || defaultTradeDateValue());
       setPnl(snap.pnl);
       setPositionSize(snap.positionSize);
       setManagementStyle(snap.managementStyle);
@@ -794,6 +803,7 @@ export function TradeForm({
     formData.set("accountId", accountId);
     formData.set("ticker", ticker);
     formData.set("direction", direction);
+    formData.set("tradeDate", tradeDate);
     formData.set("pnl", pnl);
     formData.set("positionSize", positionSize);
     formData.set("managementStyle", managementStyle);
@@ -943,10 +953,25 @@ export function TradeForm({
       return (
         <div>
           <StepHeader
-            description="Direction, net dollars, and contracts."
+            description="When it happened, direction, net dollars, and size."
             title="Result"
           />
           <div className="grid gap-4">
+            <Field>
+              <FieldLabel htmlFor="tradeDate">Trade date & time</FieldLabel>
+              <Input
+                className="h-11 tabular-nums"
+                id="tradeDate"
+                name="tradeDate"
+                onChange={(e) => setTradeDate(e.target.value)}
+                required
+                type="datetime-local"
+                value={tradeDate}
+              />
+              <FieldDescription>
+                Backfill a missed day by picking that date (e.g. July 14).
+              </FieldDescription>
+            </Field>
             <Field>
               <FieldLabel>Direction</FieldLabel>
               <RadioGroup

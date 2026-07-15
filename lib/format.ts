@@ -96,3 +96,34 @@ export function dateToDayKey(date: Date): string {
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
+
+/** Value for `<input type="datetime-local" />` from an ISO timestamp (local tz). */
+export function toDatetimeLocalValue(isoOrDate: string | Date = new Date()): string {
+  const d =
+    typeof isoOrDate === "string" ? new Date(isoOrDate) : isoOrDate;
+  if (Number.isNaN(d.getTime())) {
+    return toDatetimeLocalValue(new Date());
+  }
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day}T${h}:${min}`;
+}
+
+/**
+ * Parse datetime-local form value into ISO string.
+ * Returns null when empty or invalid.
+ */
+export function fromDatetimeLocalValue(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const d = new Date(trimmed);
+  if (Number.isNaN(d.getTime())) {
+    return null;
+  }
+  return d.toISOString();
+}

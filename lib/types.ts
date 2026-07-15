@@ -48,6 +48,8 @@ export interface TradeInput {
   chartImage: string;
   confluenceChecklist: ConfluenceChecklist;
   confluenceScore: number;
+  /** ISO timestamp for when the trade happened (defaults to now on create). */
+  createdAt?: string;
   direction: Direction;
   exitImage?: string | null;
   exitOutcome: ExitOutcome;

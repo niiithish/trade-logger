@@ -128,12 +128,13 @@ describe("isChartStepComplete", () => {
 });
 
 describe("result and management steps", () => {
-  test("result needs direction pnl size", () => {
+  test("result needs direction pnl size and trade date", () => {
     expect(
       isResultStepComplete({
         direction: "long",
         pnl: "",
         positionSize: "1",
+        tradeDate: "2026-07-14T10:00",
       })
     ).toBe(false);
     expect(
@@ -141,6 +142,15 @@ describe("result and management steps", () => {
         direction: "short",
         pnl: "10",
         positionSize: "2",
+        tradeDate: "",
+      })
+    ).toBe(false);
+    expect(
+      isResultStepComplete({
+        direction: "short",
+        pnl: "10",
+        positionSize: "2",
+        tradeDate: "2026-07-14T10:00",
       })
     ).toBe(true);
   });

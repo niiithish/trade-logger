@@ -84,9 +84,12 @@ function parseCreateTradeFields(formData: FormData) {
   const afterTp1Raw = asString(formData.get("afterTp1Stop"));
 
   const tradeDateRaw = asString(formData.get("tradeDate"));
-  const createdAt =
-    fromDatetimeLocalValue(tradeDateRaw) ??
-    (tradeDateRaw ? null : new Date().toISOString());
+  const offsetRaw = asNumber(formData.get("timezoneOffsetMinutes"));
+  // Browser getTimezoneOffset(); default 0 only if client forgot (UTC).
+  const timezoneOffsetMinutes = offsetRaw ?? 0;
+  const createdAt = tradeDateRaw
+    ? fromDatetimeLocalValue(tradeDateRaw, timezoneOffsetMinutes)
+    : new Date().toISOString();
 
   return {
     accountId: isAccountId(accountRaw) ? accountRaw : null,

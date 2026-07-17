@@ -98,9 +98,10 @@ export function dateToDayKey(date: Date): string {
 }
 
 /** Value for `<input type="datetime-local" />` from an ISO timestamp (local tz). */
-export function toDatetimeLocalValue(isoOrDate: string | Date = new Date()): string {
-  const d =
-    typeof isoOrDate === "string" ? new Date(isoOrDate) : isoOrDate;
+export function toDatetimeLocalValue(
+  isoOrDate: string | Date = new Date()
+): string {
+  const d = typeof isoOrDate === "string" ? new Date(isoOrDate) : isoOrDate;
   if (Number.isNaN(d.getTime())) {
     return toDatetimeLocalValue(new Date());
   }
@@ -112,18 +113,67 @@ export function toDatetimeLocalValue(isoOrDate: string | Date = new Date()): str
   return `${y}-${m}-${day}T${h}:${min}`;
 }
 
+const DATETIME_LOCAL_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+
 /**
- * Parse datetime-local form value into ISO string.
- * Returns null when empty or invalid.
+ * Parse a datetime-local wall-clock string into ISO UTC.
+ *
+ * IMPORTANT: Never use `new Date("YYYY-MM-DDTHH:mm")` on the server — Node/Vercel
+ * treat that as *server local* (UTC on Vercel), which shifts the calendar day for
+ * users ahead of UTC (e.g. IST). Always pass the browser's `getTimezoneOffset()`.
+ *
+ * @param offsetMinutes - `Date#getTimezoneOffset()` from the client
+ *   (minutes to add to local to get UTC; IST = -330).
  */
-export function fromDatetimeLocalValue(raw: string): string | null {
+export function fromDatetimeLocalValue(
+  raw: string,
+  offsetMinutes: number = 0
+): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
-  const d = new Date(trimmed);
+  const match = DATETIME_LOCAL_RE.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = match[6] ? Number(match[6]) : 0;
+  if (
+    ![year, month, day, hour, minute, second].every((n) => Number.isFinite(n))
+  ) {
+    return null;
+  }
+  // Wall-clock components as if UTC, then apply client offset → real UTC.
+  // UTC = local + offset  (offset = UTC - local in minutes).
+  const utcMs =
+    Date.UTC(year, month - 1, day, hour, minute, second) +
+    offsetMinutes * 60_000;
+  const result = new Date(utcMs);
+  if (Number.isNaN(result.getTime())) {
+    return null;
+  }
+  return result.toISOString();
+}
+
+/**
+ * Fix a timestamp that was stored by treating a local wall-clock as UTC
+ * (the Vercel datetime-local bug). Reinterprets the UTC Y-M-D H:M as local
+ * wall-clock in the given offset.
+ */
+export function reinterpretUtcWallClockAsLocal(
+  iso: string,
+  offsetMinutes: number
+): string | null {
+  const d = new Date(iso);
   if (Number.isNaN(d.getTime())) {
     return null;
   }
-  return d.toISOString();
+  const wall = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}T${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}:${String(d.getUTCSeconds()).padStart(2, "0")}`;
+  return fromDatetimeLocalValue(wall, offsetMinutes);
 }

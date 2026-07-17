@@ -804,6 +804,11 @@ export function TradeForm({
     formData.set("ticker", ticker);
     formData.set("direction", direction);
     formData.set("tradeDate", tradeDate);
+    // Critical: server is UTC; offset lets us keep the user's local calendar day.
+    formData.set(
+      "timezoneOffsetMinutes",
+      String(new Date().getTimezoneOffset())
+    );
     formData.set("pnl", pnl);
     formData.set("positionSize", positionSize);
     formData.set("managementStyle", managementStyle);
